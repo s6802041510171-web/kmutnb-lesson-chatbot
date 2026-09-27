@@ -21,12 +21,8 @@ app.add_middleware(
 # 1. เชื่อมต่อฐานข้อมูล ChromaDB
 DB_PATH = "./chroma_data"
 chroma_client = chromadb.PersistentClient(path=DB_PATH)
-emb_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="paraphrase-multilingual-MiniLM-L12-v2"
-)
 collection = chroma_client.get_or_create_collection(
-    name="lesson_qa_collection",
-    embedding_function=emb_fn
+    name="lesson_qa_collection"
 )
 
 # 2. ตั้งค่า Gemini Client
