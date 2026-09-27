@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ระบบผู้ช่วยแผนการจัดการเรียนรู้ AI</title>
+  <!-- Google Fonts: Prompt & Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Prompt:wght@300;400;500;600&display=swap" rel="stylesheet">
+  
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <div class="app-layout">
+    
+    <!-- Sidebar ฝั่งซ้าย: ข้อมูลระบบและคำถามแนะนำ -->
+    <aside class="sidebar">
+      <div>
+        <div class="brand-section">
+          <div class="brand-icon">AI</div>
+          <div class="brand-info">
+            <h2>ผู้ช่วยแผนการสอน</h2>
+            <p>KMUTNB Interactive Assistant</p>
+          </div>
+        </div>
+
+        <!-- คำถามแนะนำแบบด่วน -->
+        <div class="quick-questions">
+          <div class="section-title">คำถามแนะนำ</div>
+          <button class="quick-btn" onclick="sendQuick('แผนการสอนมีองค์ประกอบสำคัญอะไรบ้าง')">💡 องค์ประกอบของแผนการสอน</button>
+          <button class="quick-btn" onclick="sendQuick('K P A ในแผนการสอนคืออะไร')">🎯 K-P-A ในจุดประสงค์คืออะไร</button>
+          <button class="quick-btn" onclick="sendQuick('ขั้นตอนการออกแบบแผน Active Learning มีอะไรบ้าง')">📝 5 ขั้นตอน Active Learning</button>
+          <button class="quick-btn" onclick="sendQuick('เกณฑ์การให้คะแนนแบบ Rubric Score คืออะไร')">📊 เกณฑ์การประเมินแบบ Rubric</button>
+        </div>
+      </div>
+
+      <div class="system-status">
+        <span class="status-dot"></span> ระบบออนไลน์ (Sheets & Docs Sync)
+      </div>
+    </aside>
+
+    <!-- ฝั่งขวา: ห้องแชทขนาดเต็มหน้าจอ -->
+    <main class="chat-section">
+      <div class="chat-header">
+        <div class="chat-header-title">กล่องข้อความโต้ตอบ</div>
+        <div style="font-size: 0.85rem; color: var(--success); font-weight: 500;">● ระบบพร้อมใช้งาน</div>
+      </div>
+
+      <div class="chat-body" id="chatContainer">
+        <div class="msg-wrap bot">
+          <div class="msg-avatar">🤖</div>
+          <div class="msg-bubble">สวัสดีครับ! ผมคือ AI ผู้ช่วยตรวจสอบและแนะนำวิธีการจัดทำแผนการจัดการเรียนรู้ สอบถามองค์ประกอบ ขั้นตอน หรือเกณฑ์การวัดผลได้เลยครับ</div>
+        </div>
+      </div>
+
+      <div class="chat-input-area">
+        <div class="input-box">
+          <input type="text" id="userInput" placeholder="พิมพ์ข้อความคำถามเกี่ยวกับแผนการสอนที่นี่..." onkeydown="if(event.key==='Enter') sendMessage()">
+        </div>
+        <button class="send-btn" onclick="sendMessage()">ส่งข้อความ</button>
+      </div>
+    </main>
+
+  </div>
+
+  <script>
+    const chatContainer = document.getElementById('chatContainer');
+    const userInput = document.getElementById('userInput');
+
+    function sendQuick(text) {
+      userInput.value = text;
+      sendMessage();
+    }
+
+    async function sendMessage() {
+      const text = userInput.value.trim();
+      if (!text) return;
+
+      chatContainer.innerHTML += `
+        <div class="msg-wrap user">
+          <div class="msg-avatar">👤</div>
+          <div class="msg-bubble">${escapeHtml(text)}</div>
+        </div>
+      `;
+      userInput.value = '';
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+
+      const tempId = 'temp-' + Date.now();
+      chatContainer.innerHTML += `
+        <div class="msg-wrap bot" id="${tempId}">
+          <div class="msg-avatar">🤖</div>
+          <div class="msg-bubble typing-dots">
+            <span></span><span></span><span></span>
+          </div>
+        </div>
+      `;
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+
+      try {
+        const response = await fetch('http://localhost:8000/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text })
+        });
+
+        const data = await response.json();
+        const botElement = document.getElementById(tempId);
+        if (botElement) {
+          botElement.querySelector('.msg-bubble').innerText = data.reply;
+          botElement.querySelector('.msg-bubble').classList.remove('typing-dots');
+        }
+      } catch (error) {
+        const botElement = document.getElementById(tempId);
+        if (botElement) {
+          botElement.querySelector('.msg-bubble').innerText = "ขออภัยครับ ไม่สามารถเชื่อมต่อกับระบบ Backend ได้ กรุณาตรวจสอบว่าเปิดเซิร์ฟเวอร์ไว้หรือไม่";
+          botElement.querySelector('.msg-bubble').classList.remove('typing-dots');
+        }
+      }
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    function escapeHtml(string) {
+      return String(string).replace(/[&<>"']/g, function (s) {
+        return {
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#39;'
+        }[s];
+      });
+    }
+  </script>
+</body>
+</html>
