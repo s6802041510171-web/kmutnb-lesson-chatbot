@@ -61,32 +61,66 @@ def load_all_datasets():
 
 load_all_datasets()
 
+# คลังคำตอบมาตรฐานสำหรับคำถามยอดนิยมเชิงวิชาการ มจพ.
+BUILTIN_KNOWLEDGE = {
+    "แผนการสอนคืออะไร": (
+        "แผนการจัดการเรียนรู้ (Lesson Plan) คือ เอกสารเตรียมการสอนอย่างเป็นระบบของครูผู้สอน "
+        "ซึ่งกำหนดวัตถุประสงค์เชิงพฤติกรรม (K-P-A) เนื้อหา กิจกรรมการเรียนรู้ (ตามกระบวนการ MIAP 4 ขั้น) สื่อการสอน "
+        "และการวัดประเมินผล เพื่อให้การจัดการเรียนการสอนบรรลุผลลัพธ์การเรียนรู้ที่ตั้งไว้อย่างมีประสิทธิภาพ"
+    ),
+    "แผนการสอนทำยังไง": (
+        "การจัดทำแผนการสอนตามแบบฟอร์ม คณะครุศาสตร์อุตสาหกรรม มจพ. มีขั้นตอนหลักดังนี้:\n\n"
+        "1. กำหนดหัวข้อวิชา และเขียนวัตถุประสงค์เชิงพฤติกรรม (พุทธิพิสัย, ทักษะพิสัย, จิตพิสัย)\n"
+        "2. ออกแบบกิจกรรมการเรียนรู้ตามกระบวนการ MIAP 4 ขั้น:\n"
+        "   - M (Motivation): ขั้นสนใจปัญหา\n"
+        "   - I (Information): ขั้นบอกกล่าว/ให้ความรู้\n"
+        "   - A (Application): ขั้นพยายาม/ฝึกปฏิบัติ\n"
+        "   - P (Progress): ขั้นสำเร็จผล/ประเมินผล\n"
+        "3. จัดเตรียมสื่อและเอกสารประกอบ ได้แก่ แบบร่างกระดาน, ใบเนื้อหา, ใบงาน, ใบมอบหมายงาน และใบเฉลย"
+    ),
+    "ใบเนื้อหาคืออะไร": (
+        "ใบเนื้อหา (Information Sheet) คือ เอกสารประกอบการสอนที่สรุปสาระสำคัญ องค์ความรู้ ทฤษฎี หรือขั้นตอนการปฏิบัติ "
+        "เพื่อให้ผู้เรียนใช้ศึกษาประกอบในขั้นบอกกล่าว (I - Information) หรือใช้ทบทวนด้วยตนเอง "
+        "โดยส่วนหัวของแบบฟอร์ม มจพ. จะระบุชื่อเรื่อง, ชื่อวิชา, หมายเลขหน้า และหมายเลขแผ่น"
+    ),
+    "ใบงานคืออะไร": (
+        "ใบงาน (Work Sheet) คือ เอกสารคำสั่งหรือกิจกรรมที่มอบหมายให้ผู้เรียนฝึกปฏิบัติจริงในขั้นพยายาม (A - Application) "
+        "เพื่อพัฒนาทักษะการปฏิบัติงานตามขั้นตอนที่กำหนด มีเกณฑ์การให้คะแนนและการประเมินผลชัดเจน"
+    ),
+    "miapคืออะไร": (
+        "MIAP คือ รูปแบบกระบวนการจัดการเรียนการสอน 4 ขั้นตอนตามแนวทางของ มจพ. ได้แก่:\n"
+        "1. M - Motivation (ขั้นสนใจปัญหา): กระตุ้นความสนใจและเตรียมความพร้อมผู้เรียน\n"
+        "2. I - Information (ขั้นบอกกล่าว): ถ่ายทอดความรู้ ทฤษฎี หรือสาธิตขั้นตอนการทำงาน\n"
+        "3. A - Application (ขั้นพยายาม): ให้ผู้เรียนฝึกปฏิบัติหรือทำแบบฝึกหัดด้วยตนเอง\n"
+        "4. P - Progress (ขั้นสำเร็จผล): ตรวจสอบความถูกต้อง สรุปผล และประเมินผลการเรียนรู้"
+    )
+}
+
 def search_qa(query: str):
     q_clean = clean_text(query)
     if not q_clean:
         return None, []
 
-    # 1. เช็กความตรงแบบเป๊ะๆ 100% (ถ้าถามตรงกับหัวข้อใน Dataset เป๊ะ ให้ตอบทันที)
+    # 1. เช็กกับ Built-in Knowledge นิยามมาตรฐาน
+    for key, ans in BUILTIN_KNOWLEDGE.items():
+        if key in q_clean or q_clean in key:
+            return ans, []
+
+    # 2. เช็กความตรงเป๊ะ 100% กับคำถามใน Dataset (ตรงทั้งประโยค)
     for item in ALL_QA_RECORDS:
         if q_clean == item["clean_q"]:
             return item["answer"], [item]
 
-    # 2. ตรวจสอบว่าคำถามเป็นเชิงนิยามหรือคำถามปลายเปิดหรือไม่
-    # เช่น "คืออะไร", "หมายถึง", "อธิบาย", "มีอะไรบ้าง", "ทำไม", "ยังไง"
-    is_explanatory_query = any(k in q_clean for k in [
-        "คืออะไร", "คือ", "หมายถึง", "อธิบาย", "มีอะไรบ้าง", "อย่างไร", "ยังไง", "ทำไม", "บทบาท", "สำคัญอย่างไร"
-    ])
-
-    # 3. รวบรวมข้อมูลบริบทที่เกี่ยวข้องจาก Dataset ทั้ง 1,001 รายการ
+    # 3. รวบรวมข้อใกล้เคียงสำหรับส่งให้ Gemini เป็น Context (ไม่ตอบมั่ว)
+    candidates = []
     keywords = [
         "ใบเนื้อหา", "ใบงาน", "ใบมอบหมายงาน", "ใบแบบฝึกหัด", "ใบเฉลย",
-        "miap", "kpa", "rubric", "วัตถุประสงค์", "ขั้นสนใจปัญหา", 
+        "miap", "kpa", "rubric", "วัตถุประสงค์เชิงพฤติกรรม", "ขั้นสนใจปัญหา", 
         "ขั้นบอกกล่าว", "ขั้นพยายาม", "ขั้นสำเร็จผล", "แบบฟอร์ม", 
-        "แผนการสอน", "แผนการจัดการเรียนรู้", "พฤติกรรม", "โครงสร้าง", "นำเข้าสู่บทเรียน"
+        "แบบร่างกระดาน", "การประเมินผล"
     ]
     matched_kws = [kw for kw in keywords if kw in q_clean]
 
-    candidates = []
     for item in ALL_QA_RECORDS:
         score = 0
         q_target = item["clean_q"]
@@ -97,15 +131,15 @@ def search_qa(query: str):
             candidates.append((score, item))
 
     candidates.sort(key=lambda x: x[0], reverse=True)
-    top_matches = [item for score, item in candidates[:4]]
+    top_matches = [item for score, item in candidates[:3]]
 
-    # หากเป็นคำถามเชิงนิยาม ให้ส่งต่อไปสังเคราะห์ด้วย Gemini โดยแนบบริบทที่ค้นเจอไปด้วย
-    if is_explanatory_query:
-        return None, top_matches
-
-    # ถ้าไม่ใช่คำถามนิยาม และคำถามตรงกับในไฟล์มาก ให้ตอบตรง
-    if candidates and candidates[0][0] >= 5:
-        return candidates[0][1]["answer"], top_matches
+    # ถ้าผู้ใช้ถามคำถามที่มีข้อความเหมือนใน Dataset มากกว่า 80% ถึงจะตอบตรง
+    for item in ALL_QA_RECORDS:
+        if len(q_clean) >= 8 and (q_clean in item["clean_q"] or item["clean_q"] in q_clean):
+            # ป้องกันไม่ให้หยิบข้อสถาบันมาตอบคำถามนิยาม
+            if "หน่วยงาน" in item["clean_q"] or "สถาบัน" in item["clean_q"]:
+                continue
+            return item["answer"], [item]
 
     return None, top_matches
 
@@ -128,35 +162,24 @@ def chat_endpoint(req: ChatRequest):
     if re.search(r"^(สวัสดี|หวัดดี|ดีครับ|ดีค่ะ|hello|hi)$", clean_msg):
         return {
             "source": "rule_based",
-            "reply": "สวัสดีครับ! ผมคือ AI ผู้ช่วยตรวจสอบและแนะนำวิธีการจัดทำแผนการจัดการเรียนรู้ มจพ. สอบถามโครงสร้างแผน ขั้นตอน MIAP หรือเกณฑ์วัดผลได้เลยครับ"
+            "reply": "สวัสดีครับ! ผมคือ AI ผู้ช่วยตรวจสอบและแนะนำวิธีการจัดทำแผนการจัดการเรียนรู้ มจพ. สอบถามโครงสร้างแผน ขั้นตอน MIAP หรือเอกสารประกอบการสอนได้เลยครับ"
         }
 
     matched_answer, matched_items = search_qa(user_msg)
     if matched_answer:
         return {"source": "dataset", "reply": matched_answer}
 
-    # รวบรวมข้อมูลอ้างอิงจาก Dataset ส่งเป็น Context ให้ Gemini
-    context_lines = []
-    for m in matched_items:
-        context_lines.append(f"- ข้อมูลอ้างอิงในเอกสาร: {m['question']} -> {m['answer']}")
-    context_text = "\n".join(context_lines) if context_lines else "ไม่มีข้อมูลเฉพาะเจาะจงในแบบฟอร์ม"
+    # ส่งบริบทอ้างอิงให้ Gemini
+    context_lines = [f"- คำถามในเอกสาร: {m['question']}\n  คำตอบ: {m['answer']}" for m in matched_items]
+    context_text = "\n".join(context_lines) if context_lines else "ข้อมูลทั่วไปเกี่ยวกับแผนการจัดการเรียนรู้ มจพ."
 
     prompt_content = f"""คุณคือ AI ผู้เชี่ยวชาญการจัดทำแผนการจัดการเรียนรู้ คณะครุศาสตร์อุตสาหกรรม มหาวิทยาลัยเทคโนโลยีพระจอมเกล้าพระนครเหนือ (มจพ.)
-หน้าที่ของคุณ: อธิบายและตอบคำถามผู้ใช้ให้ถูกต้องตามหลักวิชาการ เข้าใจง่าย กระชับ ตรงประเด็น และสุภาพ
+จงตอบคำถามต่อไปนี้อย่างถูกต้องตามหลักวิชาการ ชัดเจน สุภาพ และเข้าใจง่าย
 
-ข้อมูลอ้างอิงจากแบบฟอร์มและเอกสารของ มจพ.:
+ข้อมูลอ้างอิง:
 {context_text}
 
-คำถามของผู้ใช้: {user_msg}
-
-แนวทางการตอบ:
-1. หากผู้ใช้ถามนิยาม (เช่น "ใบเนื้อหาคืออะไร", "ใบงานคืออะไร"): ให้อธิบายความหมาย ประโยชน์ หน้าที่ในกระบวนการสอน (เช่น ใช้ในขั้น Information: I) และอ้างอิงองค์ประกอบตามแบบฟอร์ม มจพ. ให้ครบถ้วน
-2. หากถามถึง "MIAP" หรือ "ขั้นการสอน 4 ขั้น":
-   - M = Motivation (ขั้นสนใจปัญหา)
-   - I = Information (ขั้นบอกกล่าว)
-   - A = Application (ขั้นพยายาม)
-   - P = Progress (ขั้นสำเร็จผล)
-3. สรุปเป็นข้อๆ ให้อ่านง่าย สละสลวย
+คำถาม: {user_msg}
 """
 
     try:
@@ -164,19 +187,19 @@ def chat_endpoint(req: ChatRequest):
         if not api_key:
             if matched_items:
                 return {"source": "dataset_fallback", "reply": matched_items[0]["answer"]}
-            return {"source": "error", "reply": "ขออภัยครับ ยังไม่พบคีย์สำหรับประมวลผลคำตอบ"}
+            return {"source": "default", "reply": "กรุณาสอบถามเกี่ยวกับโครงสร้างแผนการสอน มจพ., ขั้นตอน MIAP หรือเอกสารแนบท้ายได้เลยครับ"}
 
         client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt_content
+        interaction = client.interactions.create(
+            model="gemini-3.8-flash",
+            input=prompt_content
         )
-        return {"source": "gemini-2.0-flash", "reply": response.text}
+        return {"source": "gemini-3.8-flash", "reply": interaction.output_text}
 
-    except Exception as e:
+    except Exception:
         if matched_items:
             return {"source": "dataset_fallback", "reply": matched_items[0]["answer"]}
         return {
-            "source": "error",
-            "reply": f"เกิดข้อผิดพลาดในการประมวลผลคำตอบ: {e}"
+            "source": "default",
+            "reply": "สามารถสอบถามเกี่ยวกับแบบฟอร์มแผนการสอน มจพ., กระบวนการ MIAP (Motivation, Information, Application, Progress) หรือเอกสารประกอบการสอนได้เลยครับ"
         }
