@@ -69,6 +69,9 @@
     const chatContainer = document.getElementById('chatContainer');
     const userInput = document.getElementById('userInput');
 
+    // ตัวแปรเก็บประวัติการสนทนาสำหรับคุยต่อเนื่อง
+    const conversationHistory = [];
+
     function sendQuick(text) {
       userInput.value = text;
       sendMessage();
@@ -78,6 +81,7 @@
       const text = userInput.value.trim();
       if (!text) return;
 
+      // 1. แสดงข้อความฝั่งผู้ใช้บนหน้าจอ
       chatContainer.innerHTML += `
         <div class="msg-wrap user">
           <div class="msg-avatar">👤</div>
@@ -87,6 +91,7 @@
       userInput.value = '';
       chatContainer.scrollTop = chatContainer.scrollHeight;
 
+      // 2. แสดงสถานะกำลังคิด (Typing animation)
       const tempId = 'temp-' + Date.now();
       chatContainer.innerHTML += `
         <div class="msg-wrap bot" id="${tempId}">
@@ -99,23 +104,34 @@
       chatContainer.scrollTop = chatContainer.scrollHeight;
 
       try {
+        // 3. ส่งคำถามล่าสุด พร้อมประวัติ 6 ข้อความล่าสุดไปยัง Backend
         const response = await fetch('https://kmutnb-lesson-chatbot.onrender.com/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: text })
+          body: JSON.stringify({ 
+            message: text,
+            history: conversationHistory.slice(-6)
+          })
         });
 
         const data = await response.json();
         const botElement = document.getElementById(tempId);
         if (botElement) {
-          botElement.querySelector('.msg-bubble').innerText = data.reply;
-          botElement.querySelector('.msg-bubble').classList.remove('typing-dots');
+          const bubble = botElement.querySelector('.msg-bubble');
+          bubble.innerText = data.reply;
+          bubble.classList.remove('typing-dots');
         }
+
+        // 4. บันทึกบทสนทนาเข้าประวัติ เพื่อใช้เป็นบริบทในรอบถัดไป
+        conversationHistory.push({ role: "user", text: text });
+        conversationHistory.push({ role: "model", text: data.reply });
+
       } catch (error) {
         const botElement = document.getElementById(tempId);
         if (botElement) {
-          botElement.querySelector('.msg-bubble').innerText = "ขออภัยครับ ไม่สามารถเชื่อมต่อกับระบบ Backend ได้ กรุณาตรวจสอบว่าเปิดเซิร์ฟเวอร์ไว้หรือไม่";
-          botElement.querySelector('.msg-bubble').classList.remove('typing-dots');
+          const bubble = botElement.querySelector('.msg-bubble');
+          bubble.innerText = "ขออภัยครับ ไม่สามารถเชื่อมต่อกับระบบ Backend ได้ กรุณาตรวจสอบว่าเปิดเซิร์ฟเวอร์ไว้หรือไม่";
+          bubble.classList.remove('typing-dots');
         }
       }
       chatContainer.scrollTop = chatContainer.scrollHeight;
