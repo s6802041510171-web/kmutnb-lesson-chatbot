@@ -1,6 +1,5 @@
 fastapi
 uvicorn
-chromadb
 pandas
 openpyxl
 google-genai
