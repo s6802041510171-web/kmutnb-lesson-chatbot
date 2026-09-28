@@ -35,6 +35,7 @@ def load_all_datasets():
 
     try:
         df = pd.read_excel(file_path)
+
         q_col = next((c for c in df.columns if str(c).strip().lower() in ["คำถาม", "question", "q"]), None)
         a_col = next((c for c in df.columns if str(c).strip().lower() in ["คำตอบ", "answer", "a"]), None)
         cat_col = next((c for c in df.columns if str(c).strip().lower() in ["หมวดหมู่", "category"]), None)
@@ -58,7 +59,13 @@ def load_all_datasets():
 
 load_all_datasets()
 
+# ฐานความรู้หลักสูตร มจพ. สำหรับตอบทันที
 KNOWLEDGE_BASE = {
+    "แผนการสอนคืออะไร": (
+        "แผนการจัดการเรียนรู้ (Lesson Plan) คือ เอกสารเตรียมการสอนอย่างเป็นระบบของครูผู้สอน "
+        "ซึ่งกำหนดวัตถุประสงค์เชิงพฤติกรรม (K-P-A) เนื้อหา กิจกรรมการเรียนรู้ (ตามกระบวนการ MIAP 4 ขั้น) สื่อการสอน "
+        "และการวัดประเมินผล เพื่อให้การจัดการเรียนการสอนบรรลุผลลัพธ์การเรียนรู้ที่ตั้งไว้อย่างมีประสิทธิภาพ"
+    ),
     "แผนการสอนทำยังไง": (
         "ขั้นตอนการจัดทำแผนการจัดการเรียนรู้ตามแบบฟอร์ม คณะครุศาสตร์อุตสาหกรรม มจพ. มีดังนี้ครับ:\n\n"
         "1. กำหนดหัวข้อวิชา และระบุวัตถุประสงค์เชิงพฤติกรรม (พุทธิพิสัย, ทักษะพิสัย, จิตพิสัย)\n"
@@ -75,6 +82,18 @@ KNOWLEDGE_BASE = {
         "2. ขั้นบอกกล่าว (Information) - ให้ความรู้ ทฤษฎี หรือสาธิตขั้นตอนการทำงาน\n"
         "3. ขั้นพยายาม (Application) - ให้ผู้เรียนฝึกปฏิบัติจริงตามใบงาน\n"
         "4. ขั้นสำเร็จผล (Progress) - สรุปผล ตรวจประเมินผลงาน และให้ข้อเสนอแนะ"
+    ),
+    "ใบเนื้อหาคืออะไร": (
+        "ใบเนื้อหา (Information Sheet) คือ เอกสารประกอบการสอนที่สรุปสาระสำคัญ องค์ความรู้ ทฤษฎี หรือขั้นตอนการปฏิบัติ "
+        "เพื่อให้ผู้เรียนใช้ศึกษาประกอบในขั้นบอกกล่าว (I - Information) หรือใช้ทบทวนด้วยตนเอง "
+        "โดยส่วนหัวของแบบฟอร์ม มจพ. จะระบุชื่อเรื่อง, ชื่อวิชา, หมายเลขหน้า และหมายเลขแผ่น"
+    ),
+    "miapคืออะไร": (
+        "MIAP คือ รูปแบบกระบวนการจัดการเรียนการสอน 4 ขั้นตอนตามแนวทางของ มจพ. ได้แก่:\n"
+        "1. M - Motivation (ขั้นสนใจปัญหา): กระตุ้นความสนใจและเตรียมความพร้อมผู้เรียน\n"
+        "2. I - Information (ขั้นบอกกล่าว): ถ่ายทอดความรู้ ทฤษฎี หรือสาธิตขั้นตอนการทำงาน\n"
+        "3. A - Application (ขั้นพยายาม): ให้ผู้เรียนฝึกปฏิบัติหรือทำแบบฝึกหัดด้วยตนเอง\n"
+        "4. P - Progress (ขั้นสำเร็จผล): ตรวจสอบความถูกต้อง สรุปผล และประเมินผลการเรียนรู้"
     )
 }
 
@@ -83,14 +102,17 @@ def search_qa(query: str):
     if not q_clean:
         return None, []
 
+    # 1. ตรวจสอบนิยามมาตรฐาน
     for k, v in KNOWLEDGE_BASE.items():
         if clean_text(k) in q_clean or q_clean in clean_text(k):
             return v, []
 
+    # 2. ตรวจสอบคำถามที่ตรงใน Dataset Excel
     for item in ALL_QA_RECORDS:
         if q_clean == item["clean_q"]:
             return item["answer"], [item]
 
+    # 3. จับคู่คำสำคัญเพื่อหา Context ใกล้เคียง
     candidates = []
     keywords = ["ใบเนื้อหา", "ใบงาน", "ใบมอบหมายงาน", "ใบแบบฝึกหัด", "ใบเฉลย", "miap", "kpa", "rubric", "วัตถุประสงค์เชิงพฤติกรรม"]
     matched_kws = [kw for kw in keywords if kw in q_clean]
@@ -116,7 +138,8 @@ def read_root():
     return {
         "status": "ok", 
         "total_records": len(ALL_QA_RECORDS),
-        "engine": "Typhoon LLM + KMUTNB Dataset"
+        "source_file": "QA_Dataset_1000_Chatbot.xlsx",
+        "engine": "Typhoon LLM + KMUTNB Knowledge Base"
     }
 
 @app.post("/chat")
@@ -124,34 +147,41 @@ async def chat_endpoint(req: ChatRequest):
     user_msg = req.message.strip()
     clean_msg = user_msg.lower()
 
+    # 1. จัดการคำทักทาย
     if re.search(r"^(สวัสดี|หวัดดี|ดีครับ|ดีค่ะ|hello|hi)$", clean_msg):
         return {
             "source": "rule_based",
             "reply": "สวัสดีครับ! ผมคือ AI ผู้ช่วยจัดทำแผนการจัดการเรียนรู้ มจพ. สอบถามขั้นตอนการสอน MIAP หรือเอกสารประกอบแผนได้เลยครับ"
         }
 
-    # ถอดบริบทจากข้อความก่อนหน้า
+    # 2. ถอดบริบทบทสนทนาย้อนหลัง
     history_messages = []
     if req.history:
         for h in req.history[-6:]:
             if isinstance(h, dict):
                 role = "assistant" if h.get("role") in ["bot", "model", "assistant"] else "user"
-                history_messages.append({"role": role, "content": h.get("text", "")})
+                content = h.get("text", "")
+                if content:
+                    history_messages.append({"role": role, "content": content})
 
+    # ตรวจสอบว่าเป็นคำถามต่อเนื่อง (Follow-up) หรือไม่
     is_followup = any(w in clean_msg for w in ["แล้วทำยังไง", "ทำยังไง", "ทำอย่างไร", "ขั้นตอน", "ยังไงต่อ", "มีอะไรบ้าง", "มีอะไรอีก"])
     effective_query = "ขั้นตอนการทำแผนการสอน" if (is_followup and len(clean_msg) < 18) else user_msg
 
+    # 3. ค้นหาคำตอบจาก Dataset
     matched_answer, matched_items = search_qa(effective_query)
     if matched_answer and not req.history:
         return {"source": "dataset", "reply": matched_answer}
 
-    context_lines = [f"- {m['question']} -> {m['answer']}" for m in matched_items]
+    # 4. ส่งให้ Typhoon สังเคราะห์คำตอบ
+    context_lines = [f"- คำถาม: {m['question']}\n  คำตอบ: {m['answer']}" for m in matched_items]
     reference_context = "\n".join(context_lines) if context_lines else "ข้อมูลทั่วไปเกี่ยวกับแผนการจัดการเรียนรู้ มจพ."
 
     system_instruction = f"""คุณคือ AI ผู้เชี่ยวชาญการจัดทำแผนการจัดการเรียนรู้ คณะครุศาสตร์อุตสาหกรรม มหาวิทยาลัยเทคโนโลยีพระจอมเกล้าพระนครเหนือ (มจพ.)
-หน้าที่ของคุณคือช่วยตอบคำถามอย่างถูกต้องตามหลักวิชาการ กระชับ สุภาพ และอิงตามกระบวนการสอน MIAP และแบบฟอร์ม มจพ.
+หน้าที่ของคุณคือตอบคำถามผู้ใช้อย่างถูกต้องตามหลักวิชาการ สุภาพ ชัดเจน เข้าใจง่าย และให้ต่อเนื่องกับบริบทบทสนทนา
+ใช้กระบวนการสอน MIAP 4 ขั้น (Motivation, Information, Application, Progress) และรูปแบบเอกสารของ มจพ. เป็นหลัก
 
-ข้อมูลอ้างอิงจากแบบฟอร์ม/คลังข้อสอบ มจพ.:
+ข้อมูลอ้างอิง:
 {reference_context}
 """
 
@@ -166,14 +196,13 @@ async def chat_endpoint(req: ChatRequest):
                 return {"source": "dataset_fallback", "reply": matched_answer}
             return {"source": "builtin", "reply": KNOWLEDGE_BASE["แผนการสอนทำยังไง"]}
 
-        # เรียกใช้งาน Typhoon ผ่าน OpenAI-compatible client
         client = OpenAI(
             api_key=api_key,
             base_url="https://api.opentyphoon.ai/v1"
         )
 
         response = client.chat.completions.create(
-            model="typhoon-v1.5x-70b-instruct",  # หรือ typhoon-v1.5-instruct
+            model="typhoon-v1.5x-70b-instruct",
             messages=messages_payload,
             temperature=0.4,
             max_tokens=1000
