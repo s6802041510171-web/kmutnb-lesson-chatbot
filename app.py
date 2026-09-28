@@ -1,9 +1,8 @@
 import os
 import re
-import glob
 import pandas as pd
 from typing import List, Optional, Any
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from google import genai
@@ -29,40 +28,39 @@ def load_all_datasets():
     global ALL_QA_RECORDS
     ALL_QA_RECORDS = []
     
-    data_files = glob.glob("*.csv") + glob.glob("*.xlsx")
-    
-    for file_path in data_files:
-        try:
-            if file_path.endswith(".csv"):
-                try:
-                    df = pd.read_csv(file_path, encoding="utf-8-sig")
-                except Exception:
-                    df = pd.read_csv(file_path, encoding="tis-620")
-            else:
-                df = pd.read_excel(file_path)
+    file_path = "QA_Dataset_1000_Chatbot.xlsx"
+    if not os.path.exists(file_path):
+        print(f"Warning: {file_path} not found!")
+        return
 
-            q_col = next((c for c in df.columns if str(c).strip().lower() in ["คำถาม", "question", "q"]), None)
-            a_col = next((c for c in df.columns if str(c).strip().lower() in ["คำตอบ", "answer", "a"]), None)
-            cat_col = next((c for c in df.columns if str(c).strip().lower() in ["หมวดหมู่", "category"]), None)
+    try:
+        df = pd.read_excel(file_path)
 
-            if q_col and a_col:
-                for _, row in df.iterrows():
-                    q = str(row.get(q_col, "")).strip()
-                    a = str(row.get(a_col, "")).strip()
-                    cat = str(row.get(cat_col, "")).strip() if cat_col else ""
-                    if q and a and q.lower() != "nan" and a.lower() != "nan":
-                        ALL_QA_RECORDS.append({
-                            "question": q,
-                            "clean_q": clean_text(q),
-                            "answer": a,
-                            "category": cat
-                        })
-        except Exception as e:
-            print(f"Error loading {file_path}: {e}")
+        # ค้นหาชื่อคอลัมน์ คำถาม คำตอบ และหมวดหมู่
+        q_col = next((c for c in df.columns if str(c).strip().lower() in ["คำถาม", "question", "q"]), None)
+        a_col = next((c for c in df.columns if str(c).strip().lower() in ["คำตอบ", "answer", "a"]), None)
+        cat_col = next((c for c in df.columns if str(c).strip().lower() in ["หมวดหมู่", "category"]), None)
+
+        if q_col and a_col:
+            for _, row in df.iterrows():
+                q = str(row.get(q_col, "")).strip()
+                a = str(row.get(a_col, "")).strip()
+                cat = str(row.get(cat_col, "")).strip() if cat_col else ""
+                
+                if q and a and q.lower() != "nan" and a.lower() != "nan":
+                    ALL_QA_RECORDS.append({
+                        "question": q,
+                        "clean_q": clean_text(q),
+                        "answer": a,
+                        "category": cat
+                    })
+        print(f"Loaded {len(ALL_QA_RECORDS)} records from {file_path}")
+    except Exception as e:
+        print(f"Error loading {file_path}: {e}")
 
 load_all_datasets()
 
-# ฐานความรู้หลักสูตร มจพ. สำหรับตอบทันที
+# ฐานความรู้หลักสูตร มจพ. สำหรับตอบทันทีเมื่อผู้ใช้ถามนิยามหรือขั้นตอน
 KNOWLEDGE_BASE = {
     "แผนการสอนทำยังไง": (
         "ขั้นตอนการจัดทำแผนการจัดการเรียนรู้ตามแบบฟอร์ม คณะครุศาสตร์อุตสาหกรรม มจพ. มีดังนี้ครับ:\n\n"
@@ -80,6 +78,18 @@ KNOWLEDGE_BASE = {
         "2. ขั้นบอกกล่าว (Information) - ให้ความรู้ ทฤษฎี หรือสาธิตขั้นตอนการทำงาน\n"
         "3. ขั้นพยายาม (Application) - ให้ผู้เรียนฝึกปฏิบัติจริงตามใบงาน\n"
         "4. ขั้นสำเร็จผล (Progress) - สรุปผล ตรวจประเมินผลงาน และให้ข้อเสนอแนะ"
+    ),
+    "ใบเนื้อหาคืออะไร": (
+        "ใบเนื้อหา (Information Sheet) คือ เอกสารประกอบการสอนที่สรุปสาระสำคัญ องค์ความรู้ ทฤษฎี หรือขั้นตอนการปฏิบัติ "
+        "เพื่อให้ผู้เรียนใช้ศึกษาประกอบในขั้นบอกกล่าว (I - Information) หรือใช้ทบทวนด้วยตนเอง "
+        "โดยส่วนหัวของแบบฟอร์ม มจพ. จะระบุชื่อเรื่อง, ชื่อวิชา, หมายเลขหน้า และหมายเลขแผ่น"
+    ),
+    "miapคืออะไร": (
+        "MIAP คือ รูปแบบกระบวนการจัดการเรียนการสอน 4 ขั้นตอนตามแนวทางของ มจพ. ได้แก่:\n"
+        "1. M - Motivation (ขั้นสนใจปัญหา): กระตุ้นความสนใจและเตรียมความพร้อมผู้เรียน\n"
+        "2. I - Information (ขั้นบอกกล่าว): ถ่ายทอดความรู้ ทฤษฎี หรือสาธิตขั้นตอนการทำงาน\n"
+        "3. A - Application (ขั้นพยายาม): ให้ผู้เรียนฝึกปฏิบัติหรือทำแบบฝึกหัดด้วยตนเอง\n"
+        "4. P - Progress (ขั้นสำเร็จผล): ตรวจสอบความถูกต้อง สรุปผล และประเมินผลการเรียนรู้"
     )
 }
 
@@ -88,16 +98,19 @@ def search_qa(query: str):
     if not q_clean:
         return None, []
 
+    # 1. เช็กกับนิยาม/ขั้นตอนมาตรฐาน
     for k, v in KNOWLEDGE_BASE.items():
         if clean_text(k) in q_clean or q_clean in clean_text(k):
             return v, []
 
+    # 2. เช็กความตรงเป๊ะ 100% กับคำถามใน Dataset Excel
     for item in ALL_QA_RECORDS:
         if q_clean == item["clean_q"]:
             return item["answer"], [item]
 
+    # 3. จับคู่คำสำคัญ
     candidates = []
-    keywords = ["ใบเนื้อหา", "ใบงาน", "ใบมอบหมายงาน", "ใบแบบฝึกหัด", "ใบเฉลย", "miap", "kpa", "rubric", "วัตถุประสงค์"]
+    keywords = ["ใบเนื้อหา", "ใบงาน", "ใบมอบหมายงาน", "ใบแบบฝึกหัด", "ใบเฉลย", "miap", "kpa", "rubric", "วัตถุประสงค์เชิงพฤติกรรม"]
     matched_kws = [kw for kw in keywords if kw in q_clean]
 
     for item in ALL_QA_RECORDS:
@@ -118,46 +131,58 @@ class ChatRequest(BaseModel):
 
 @app.get("/")
 def read_root():
-    return {"status": "ok", "total_records": len(ALL_QA_RECORDS)}
+    return {
+        "status": "ok", 
+        "total_records": len(ALL_QA_RECORDS),
+        "source_file": "QA_Dataset_1000_Chatbot.xlsx"
+    }
 
 @app.post("/chat")
 async def chat_endpoint(req: ChatRequest):
     user_msg = req.message.strip()
     clean_msg = user_msg.lower()
 
-    # 1. จัดการคำทักทาย
+    # 1. คำทักทาย
     if re.search(r"^(สวัสดี|หวัดดี|ดีครับ|ดีค่ะ|hello|hi)$", clean_msg):
         return {
             "source": "rule_based",
             "reply": "สวัสดีครับ! ผมคือ AI ผู้ช่วยจัดทำแผนการจัดการเรียนรู้ มจพ. สอบถามขั้นตอนการสอน MIAP หรือเอกสารประกอบแผนได้เลยครับ"
         }
 
-    # 2. ถอดบริบทจากข้อความก่อนหน้า หากผู้ใช้ถามคำต่อเนื่อง (Follow-up)
-    last_topic = "แผนการสอน"
+    # 2. ถอดบริบทจากบทสนทนาก่อนหน้า
     history_text = ""
+    last_user_query = ""
     if req.history:
         for h in req.history[-4:]:
             if isinstance(h, dict):
                 r = "ผู้ใช้" if h.get("role") in ["user", "human"] else "บอท"
                 history_text += f"{r}: {h.get('text', '')}\n"
+                if h.get("role") in ["user", "human"]:
+                    last_user_query = h.get("text", "")
 
-    # ถ้าผู้ใช้ถามสั้นๆ เช่น "แล้วทำยังไง", "ทำยังไง", "ขั้นตอนมีอะไรบ้าง"
-    is_followup = any(w in clean_msg for w in ["แล้วทำยังไง", "ทำยังไง", "ทำอย่างไร", "ขั้นตอน", "ยังไงต่อ", "มีอะไรบ้าง"])
+    # ตรวจสอบว่าเป็นคำถามต่อเนื่อง (Follow-up) หรือไม่
+    is_followup = any(w in clean_msg for w in ["แล้วทำยังไง", "ทำยังไง", "ทำอย่างไร", "ขั้นตอน", "ยังไงต่อ", "มีอะไรบ้าง", "มีอะไรอีก"])
     effective_query = user_msg
-    if is_followup and len(clean_msg) < 15:
-        effective_query = f"ขั้นตอนการทำ{last_topic}"
+    if is_followup and len(clean_msg) < 18:
+        effective_query = f"ขั้นตอนการทำแผนการสอน"
 
-    # 3. ตรวจสอบในคลังคำตอบ
+    # 3. ค้นหาคำตอบจากไฟล์ Excel
     matched_answer, matched_items = search_qa(effective_query)
     if matched_answer:
         return {"source": "dataset", "reply": matched_answer}
 
     # 4. ส่งให้ Gemini สังเคราะห์คำตอบ
-    prompt_content = f"""คุณคือ AI ผู้ช่วยจัดทำแผนการจัดการเรียนรู้ คณะครุศาสตร์อุตสาหกรรม มจพ.
-ตอบคำถามอย่างกระชับ สุภาพ และถูกต้องตามกระบวนการสอนแบบ MIAP
+    context_lines = [f"- {m['question']} -> {m['answer']}" for m in matched_items]
+    reference_context = "\n".join(context_lines) if context_lines else "ข้อมูลทั่วไปเกี่ยวกับแผนการจัดการเรียนรู้ มจพ."
+
+    prompt_content = f"""คุณคือ AI ผู้ช่วยจัดทำแผนการจัดการเรียนรู้ คณะครุศาสตร์อุตสาหกรรม มหาวิทยาลัยเทคโนโลยีพระจอมเกล้าพระนครเหนือ (มจพ.)
+หน้าที่ของคุณ: ตอบคำถามอย่างสละสลวย ถูกต้องตามหลักวิชาการ และต่อเนื่องจากบทสนทนาก่อนหน้า
 
 บริบทการสนทนาก่อนหน้า:
 {history_text}
+
+ข้อมูลอ้างอิงจากคลังข้อสอบ/แบบฟอร์ม:
+{reference_context}
 
 คำถามล่าสุดของผู้ใช้: {user_msg}
 (หัวข้อที่กำลังสนทนา: {effective_query})
@@ -175,7 +200,6 @@ async def chat_endpoint(req: ChatRequest):
         )
         return {"source": "gemini-3.8-flash", "reply": interaction.output_text}
     except Exception:
-        # หาก Gemini ขัดข้อง ให้ส่งคำตอบมาตรฐานที่ตรงเรื่องทันที
         if is_followup or "ทำยังไง" in clean_msg or "ขั้นตอน" in clean_msg:
             return {"source": "builtin", "reply": KNOWLEDGE_BASE["แผนการสอนทำยังไง"]}
         return {
