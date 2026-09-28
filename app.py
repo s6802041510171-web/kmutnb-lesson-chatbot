@@ -21,14 +21,14 @@ app.add_middleware(
 
 # 1. เชื่อมต่อฐานข้อมูล ChromaDB (แบบเบา ไม่กิน RAM)
 DB_PATH = "./chroma_data"
-chroma_client = chromadb.PersistentClient(path=DB_PATH)
-collection = chroma_client.get_or_create_collection(
-    name="lesson_qa_collection"
-)
-
-# 2. ตั้งค่า Gemini Client
-api_key = os.getenv("GEMINI_API_KEY", "")
-client = genai.Client(api_key=api_key) if api_key else None
+try:
+    chroma_client = chromadb.PersistentClient(path=DB_PATH)
+    collection = chroma_client.get_or_create_collection(
+        name="lesson_qa_collection"
+    )
+except Exception as e:
+    print(f"ChromaDB Init Warning: {e}")
+    collection = None
 
 # ไฟล์สำหรับเก็บคำตอบที่บอทเรียนรู้ด้วยตัวเอง
 LEARNED_FILE = "learned_qa.csv"
@@ -40,13 +40,14 @@ if not os.path.exists(LEARNED_FILE):
 def auto_learn(question: str, answer: str):
     """ฟังก์ชันเรียนรู้และบันทึกคำตอบใหม่ลง Vector DB และไฟล์ CSV ทันที"""
     try:
-        new_id = f"auto_{collection.count() + 1}"
-        searchable_text = f"คำถาม: {question} คำตอบ: {answer}"
-        collection.upsert(
-            documents=[searchable_text],
-            metadatas=[{"question": question, "answer": answer, "source": "self_learned"}],
-            ids=[new_id]
-        )
+        if collection:
+            new_id = f"auto_{collection.count() + 1}"
+            searchable_text = f"คำถาม: {question} คำตอบ: {answer}"
+            collection.upsert(
+                documents=[searchable_text],
+                metadatas=[{"question": question, "answer": answer, "source": "self_learned"}],
+                ids=[new_id]
+            )
         with open(LEARNED_FILE, mode="a", encoding="utf-8-sig", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([question, answer])
@@ -78,27 +79,28 @@ def chat_endpoint(req: ChatRequest):
     best_answer = None
     metas = []
 
-    try:
-        results = collection.query(
-            query_texts=[user_msg],
-            n_results=4
-        )
-        if results and "documents" in results and results["documents"]:
-            docs = results["documents"][0]
-            metas = results["metadatas"][0] if "metadatas" in results and results["metadatas"] else []
-            distances = results["distances"][0] if "distances" in results and results["distances"] else [1.0] * len(docs)
+    if collection:
+        try:
+            results = collection.query(
+                query_texts=[user_msg],
+                n_results=4
+            )
+            if results and "documents" in results and results["documents"]:
+                docs = results["documents"][0]
+                metas = results["metadatas"][0] if "metadatas" in results and results["metadatas"] else []
+                distances = results["distances"][0] if "distances" in results and results["distances"] else [1.0] * len(docs)
 
-            best_dist = distances[0] if distances else 1.0
+                best_dist = distances[0] if distances else 1.0
 
-            for doc, meta in zip(docs, metas):
-                q_ref = meta.get("question", doc) if meta else doc
-                ans = meta.get("answer", "") if meta else ""
-                matched_texts.append(f"- คำถาม: {q_ref}\n  คำตอบ: {ans}")
+                for doc, meta in zip(docs, metas):
+                    q_ref = meta.get("question", doc) if meta else doc
+                    ans = meta.get("answer", "") if meta else ""
+                    matched_texts.append(f"- คำถาม: {q_ref}\n  คำตอบ: {ans}")
 
-            if best_dist < 0.25 and metas and metas[0].get("answer"):
-                best_answer = metas[0].get("answer")
-    except Exception as e:
-        print(f"ChromaDB Query Error: {e}")
+                if best_dist < 0.25 and metas and metas[0].get("answer"):
+                    best_answer = metas[0].get("answer")
+        except Exception as e:
+            print(f"ChromaDB Query Warning (Skipping to AI): {e}")
 
     if best_answer:
         return {
@@ -106,7 +108,7 @@ def chat_endpoint(req: ChatRequest):
             "reply": best_answer
         }
 
-    # --- ด่านที่ 3: สังเคราะห์คำตอบผ่าน AI ---
+    # --- ด่านที่ 3: สังเคราะห์คำตอบผ่าน AI (Gemini 3.8 Flash Interactions API) ---
     context = "\n".join(matched_texts) if matched_texts else "ไม่มีข้อมูลที่ตรงกันโดยตรง"
 
     prompt_content = f"""คุณคือ AI ผู้เชี่ยวชาญการจัดทำแผนการจัดการเรียนรู้ คณะครุศาสตร์อุตสาหกรรม มจพ.
@@ -129,11 +131,13 @@ def chat_endpoint(req: ChatRequest):
             return {"source": "error", "reply": "ระบบขัดข้อง: ไม่พบคีย์ GEMINI_API_KEY ใน Render Environment"}
 
         ai_client = genai.Client(api_key=current_api_key)
-        response = ai_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt_content
+        
+        # ใช้โมเดล gemini-3.8-flash ผ่าน interactions.create ตามที่ API แนะนำ
+        interaction = ai_client.interactions.create(
+            model="gemini-3.8-flash",
+            input=prompt_content
         )
-        reply = response.text
+        reply = interaction.output_text
 
         if reply and len(reply) > 10 and "ขออภัย" not in reply:
             auto_learn(user_msg, reply)
