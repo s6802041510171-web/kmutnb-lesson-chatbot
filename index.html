@@ -15,7 +15,7 @@
 
   <div class="app-layout">
     
-    <!-- Sidebar ฝั่งซ้าย: ข้อมูลระบบและคำถามแนะนำ -->
+    <!-- Sidebar ฝั่งซ้าย: ข้อมูลระบบ -->
     <aside class="sidebar">
       <div>
         <div class="brand-section">
@@ -24,15 +24,6 @@
             <h2>ผู้ช่วยแผนการสอน</h2>
             <p>KMUTNB Interactive Assistant</p>
           </div>
-        </div>
-
-        <!-- คำถามแนะนำแบบด่วน -->
-        <div class="quick-questions">
-          <div class="section-title">คำถามแนะนำ</div>
-          <button class="quick-btn" onclick="sendQuick('แผนการสอนมีองค์ประกอบสำคัญอะไรบ้าง')">💡 องค์ประกอบของแผนการสอน</button>
-          <button class="quick-btn" onclick="sendQuick('K P A ในแผนการสอนคืออะไร')">🎯 K-P-A ในจุดประสงค์คืออะไร</button>
-          <button class="quick-btn" onclick="sendQuick('ขั้นตอนการออกแบบแผน Active Learning มีอะไรบ้าง')">📝 5 ขั้นตอน Active Learning</button>
-          <button class="quick-btn" onclick="sendQuick('เกณฑ์การให้คะแนนแบบ Rubric Score คืออะไร')">📊 เกณฑ์การประเมินแบบ Rubric</button>
         </div>
       </div>
 
@@ -71,11 +62,6 @@
 
     // ตัวแปรเก็บประวัติการสนทนาสำหรับคุยต่อเนื่อง
     const conversationHistory = [];
-
-    function sendQuick(text) {
-      userInput.value = text;
-      sendMessage();
-    }
 
     async function sendMessage() {
       const text = userInput.value.trim();
