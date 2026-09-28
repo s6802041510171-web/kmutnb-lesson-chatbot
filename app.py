@@ -1,11 +1,11 @@
 import os
 import re
 import csv
+import glob
 import pandas as pd
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import chromadb
 from google import genai
 
 app = FastAPI()
@@ -19,48 +19,107 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 1. เชื่อมต่อฐานข้อมูล ChromaDB (แบบเบา ไม่กิน RAM)
-DB_PATH = "./chroma_data"
-try:
-    chroma_client = chromadb.PersistentClient(path=DB_PATH)
-    collection = chroma_client.get_or_create_collection(
-        name="lesson_qa_collection"
-    )
-except Exception as e:
-    print(f"ChromaDB Init Warning: {e}")
-    collection = None
+# คลังข้อมูลเก็บคำถาม-คำตอบทั้งหมด
+ALL_QA_RECORDS = []
 
-# ไฟล์สำหรับเก็บคำตอบที่บอทเรียนรู้ด้วยตัวเอง
-LEARNED_FILE = "learned_qa.csv"
-if not os.path.exists(LEARNED_FILE):
-    with open(LEARNED_FILE, mode="w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["Question", "Answer"])
+def clean_text(text: str) -> str:
+    """ทำความสะอาดข้อความเพื่อเปรียบเทียบ"""
+    text = text.lower()
+    text = re.sub(r"[^\w\sก-๙]", "", text)
+    return text.strip()
 
-def auto_learn(question: str, answer: str):
-    """ฟังก์ชันเรียนรู้และบันทึกคำตอบใหม่ลง Vector DB และไฟล์ CSV ทันที"""
-    try:
-        if collection:
-            new_id = f"auto_{collection.count() + 1}"
-            searchable_text = f"คำถาม: {question} คำตอบ: {answer}"
-            collection.upsert(
-                documents=[searchable_text],
-                metadatas=[{"question": question, "answer": answer, "source": "self_learned"}],
-                ids=[new_id]
-            )
-        with open(LEARNED_FILE, mode="a", encoding="utf-8-sig", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow([question, answer])
-        print(f"💡 AI เรียนรู้และบันทึกข้อมูลใหม่แล้ว: {question}")
-    except Exception as e:
-        print(f"Error auto-learning: {e}")
+def load_all_datasets():
+    """กวาดอ่านข้อมูล Q&A จากไฟล์ Excel และ CSV ทั้งหมดในโฟลเดอร์"""
+    global ALL_QA_RECORDS
+    ALL_QA_RECORDS = []
+    
+    data_files = glob.glob("*.csv") + glob.glob("*.xlsx")
+    
+    for file_path in data_files:
+        try:
+            if file_path.endswith(".csv"):
+                try:
+                    df = pd.read_csv(file_path, encoding="utf-8-sig")
+                except Exception:
+                    df = pd.read_csv(file_path, encoding="tis-620")
+            else:
+                df = pd.read_excel(file_path)
+
+            # ตรวจหาชื่อคอลัมน์คำถาม คำตอบ และหมวดหมู่
+            q_col = next((c for c in df.columns if str(c).strip().lower() in ["คำถาม", "question", "q"]), None)
+            a_col = next((c for c in df.columns if str(c).strip().lower() in ["คำตอบ", "answer", "a"]), None)
+            cat_col = next((c for c in df.columns if str(c).strip().lower() in ["หมวดหมู่", "category"]), None)
+
+            if q_col and a_col:
+                count = 0
+                for _, row in df.iterrows():
+                    q = str(row.get(q_col, "")).strip()
+                    a = str(row.get(a_col, "")).strip()
+                    cat = str(row.get(cat_col, "")).strip() if cat_col else ""
+                    if q and a and q.lower() != "nan" and a.lower() != "nan":
+                        ALL_QA_RECORDS.append({
+                            "question": q,
+                            "clean_q": clean_text(q),
+                            "answer": a,
+                            "category": cat,
+                            "source_file": file_path
+                        })
+                        count += 1
+                print(f"✅ โหลดชุดข้อมูล {file_path}: {count} ข้อ")
+        except Exception as e:
+            print(f"⚠️ ไม่สามารถเปิดอ่านไฟล์ {file_path}: {e}")
+
+    print(f"🚀 รวมคลังความรู้พร้อมตอบทั้งหมด: {len(ALL_QA_RECORDS)} รายการ")
+
+# สั่งโหลดข้อมูลทันทีเมื่อเซิร์ฟเวอร์เปิด
+load_all_datasets()
+
+def search_qa(query: str):
+    """ค้นหาคำตอบที่ตรงหรือใกล้เคียงที่สุดจากชุดข้อมูล"""
+    q_clean = clean_text(query)
+    
+    # 1. เช็กความตรงแบบ 100% หรือมีข้อความซ้อนกันอยู่
+    for item in ALL_QA_RECORDS:
+        if q_clean == item["clean_q"] or q_clean in item["clean_q"] or item["clean_q"] in q_clean:
+            return item["answer"], [item]
+
+    # 2. ค้นหาแบบแยกคำสำคัญ (Substrings / Keywords)
+    words = [w for w in re.split(r"\s+", q_clean) if len(w) > 1]
+    candidates = []
+    
+    for item in ALL_QA_RECORDS:
+        score = 0
+        q_target = item["clean_q"]
+        for w in words:
+            if w in q_target:
+                score += 3
+            elif w in item["category"].lower():
+                score += 2
+            elif w in item["answer"].lower():
+                score += 1
+
+        if score > 0:
+            candidates.append((score, item))
+
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    top_matches = [item for score, item in candidates[:3]]
+
+    # หากมีคะแนนความเกี่ยวข้อง ให้ใช้คำตอบที่ดีที่สุด
+    if candidates and candidates[0][0] >= 2:
+        return candidates[0][1]["answer"], top_matches
+
+    return None, top_matches
 
 class ChatRequest(BaseModel):
     message: str
 
 @app.get("/")
 def read_root():
-    return {"status": "ok", "message": "KMUTNB Lesson Chatbot Backend is running live"}
+    return {
+        "status": "ok", 
+        "total_records": len(ALL_QA_RECORDS),
+        "message": "KMUTNB Lesson Chatbot is ready"
+    }
 
 @app.post("/chat")
 def chat_endpoint(req: ChatRequest):
@@ -71,82 +130,52 @@ def chat_endpoint(req: ChatRequest):
     if re.search(r"^(สวัสดี|หวัดดี|ดีครับ|ดีค่ะ|hello|hi)$", clean_msg):
         return {
             "source": "rule_based",
-            "reply": "สวัสดีครับ! ผมคือ AI ผู้ช่วยตรวจสอบและแนะนำแผนการจัดการเรียนรู้ (มจพ.) สอบถามข้อมูลโครงสร้างแผน MIAP หรือเอกสารประกอบได้เลยครับ"
+            "reply": "สวัสดีครับ! ผมคือ AI ผู้ช่วยตรวจสอบและแนะนำวิธีการจัดทำแผนการจัดการเรียนรู้ มจพ. สอบถามองค์ประกอบ ขั้นตอน หรือเกณฑ์การวัดผลได้เลยครับ"
         }
 
-    # --- ด่านที่ 2: ดึงข้อมูลจาก ChromaDB ---
-    matched_texts = []
-    best_answer = None
-    metas = []
+    # --- ด่านที่ 2: ค้นหาคำตอบจาก Dataset 3 ไฟล์โดยตรง ---
+    matched_answer, matched_items = search_qa(user_msg)
+    if matched_answer:
+        return {"source": "dataset", "reply": matched_answer}
 
-    if collection:
-        try:
-            results = collection.query(
-                query_texts=[user_msg],
-                n_results=4
-            )
-            if results and "documents" in results and results["documents"]:
-                docs = results["documents"][0]
-                metas = results["metadatas"][0] if "metadatas" in results and results["metadatas"] else []
-                distances = results["distances"][0] if "distances" in results and results["distances"] else [1.0] * len(docs)
-
-                best_dist = distances[0] if distances else 1.0
-
-                for doc, meta in zip(docs, metas):
-                    q_ref = meta.get("question", doc) if meta else doc
-                    ans = meta.get("answer", "") if meta else ""
-                    matched_texts.append(f"- คำถาม: {q_ref}\n  คำตอบ: {ans}")
-
-                if best_dist < 0.25 and metas and metas[0].get("answer"):
-                    best_answer = metas[0].get("answer")
-        except Exception as e:
-            print(f"ChromaDB Query Warning (Skipping to AI): {e}")
-
-    if best_answer:
-        return {
-            "source": "vector_direct",
-            "reply": best_answer
-        }
-
-    # --- ด่านที่ 3: สังเคราะห์คำตอบผ่าน AI (Gemini 3.8 Flash Interactions API) ---
-    context = "\n".join(matched_texts) if matched_texts else "ไม่มีข้อมูลที่ตรงกันโดยตรง"
-
+    # --- ด่านที่ 3: สังเคราะห์คำตอบผ่าน AI (ถ้าหาไม่เจอจริงๆ) ---
+    context_text = "\n".join([f"- ถาม: {m['question']}\n  ตอบ: {m['answer']}" for m in matched_items])
     prompt_content = f"""คุณคือ AI ผู้เชี่ยวชาญการจัดทำแผนการจัดการเรียนรู้ คณะครุศาสตร์อุตสาหกรรม มจพ.
-หน้าที่ของคุณ: ตอบคำถามผู้ใช้ให้ตรงประเด็น ถูกต้อง กระชับ และสุภาพ
+หน้าที่ของคุณ: ตอบคำถามผู้ใช้ให้ถูกต้องตามหลักวิชาการ กระชับ ตรงประเด็น และสุภาพ
 
-ข้อมูลอ้างอิงจากฐานข้อมูล:
-{context}
+ข้อมูลอ้างอิง:
+{context_text}
 
 คำถามของผู้ใช้: {user_msg}
 
-ข้อกำหนดสำคัญในการตอบ:
-1. หากคำถามถามถึง "MIAP" หรือ "ขั้นการสอน 4 ขั้น": MIAP คือ Motivation (ขั้นสนใจปัญหา), Information (ขั้นบอกกล่าว), Application (ขั้นพยายาม), Progress (ขั้นสำเร็จผล)
-2. หากในข้อมูลอ้างอิงมีเนื้อหาที่เกี่ยวข้อง ให้ดึงเนื้อหานั้นมาตอบเป็นหลัก
-3. ตอบเฉพาะหัวข้อที่ถาม ไม่ต้องนำเนื้อหาอื่นที่ไม่เกี่ยวข้องมาปน
+ข้อกำหนดสำคัญ:
+1. หากคำถามถามถึง "MIAP" หรือ "ขั้นการสอน 4 ขั้น":
+   - M = Motivation (ขั้นสนใจปัญหา)
+   - I = Information (ขั้นบอกกล่าว)
+   - A = Application (ขั้นพยายาม)
+   - P = Progress (ขั้นสำเร็จผล)
+2. อธิบายอย่างเป็นขั้นตอนและชัดเจน
 """
 
     try:
-        current_api_key = os.getenv("GEMINI_API_KEY", "").strip()
-        if not current_api_key:
-            return {"source": "error", "reply": "ระบบขัดข้อง: ไม่พบคีย์ GEMINI_API_KEY ใน Render Environment"}
+        api_key = os.getenv("GEMINI_API_KEY", "").strip()
+        if not api_key:
+            if matched_items:
+                return {"source": "dataset_fallback", "reply": matched_items[0]["answer"]}
+            return {"source": "error", "reply": "ขออภัยครับ ยังไม่พบข้อมูลที่ตรงกับคำถามนี้ในระบบ"}
 
-        ai_client = genai.Client(api_key=current_api_key)
-        
-        # ใช้โมเดล gemini-3.8-flash ผ่าน interactions.create ตามที่ API แนะนำ
-        interaction = ai_client.interactions.create(
+        client = genai.Client(api_key=api_key)
+        interaction = client.interactions.create(
             model="gemini-3.8-flash",
             input=prompt_content
         )
-        reply = interaction.output_text
-
-        if reply and len(reply) > 10 and "ขออภัย" not in reply:
-            auto_learn(user_msg, reply)
-
-        return {"source": "gemini_learned", "reply": reply}
+        return {"source": "gemini-3.8-flash", "reply": interaction.output_text}
 
     except Exception as e:
-        error_msg = str(e)
-        print(f"Gemini API Error: {error_msg}")
-        if metas and metas[0].get("answer"):
-            return {"source": "vector_fallback", "reply": metas[0].get("answer")}
-        return {"source": "error", "reply": f"เกิดข้อผิดพลาดจาก AI: {error_msg}"}
+        # หากติด Rate limit 429 หรือมี Error ให้ส่งคำตอบที่ใกล้เคียงที่สุดจาก Dataset กลับไปแทน
+        if matched_items:
+            return {"source": "dataset_fallback", "reply": matched_items[0]["answer"]}
+        return {
+            "source": "fallback",
+            "reply": "ขออภัยครับ ขณะนี้ระบบประมวลผลคำตอบอัตโนมัติเต็มชั่วคราว กรุณาลองสอบถามเกี่ยวกับแบบฟอร์มแผนการสอน มจพ., โครงสร้าง MIAP หรือเนื้อหาหนังสือแผนการสอนได้เลยครับ"
+        }
