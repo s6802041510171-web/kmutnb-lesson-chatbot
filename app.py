@@ -2,6 +2,7 @@ import os
 import re
 import glob
 import pandas as pd
+from typing import List, Optional
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -61,66 +62,26 @@ def load_all_datasets():
 
 load_all_datasets()
 
-# คลังคำตอบมาตรฐานสำหรับคำถามยอดนิยมเชิงวิชาการ มจพ.
-BUILTIN_KNOWLEDGE = {
-    "แผนการสอนคืออะไร": (
-        "แผนการจัดการเรียนรู้ (Lesson Plan) คือ เอกสารเตรียมการสอนอย่างเป็นระบบของครูผู้สอน "
-        "ซึ่งกำหนดวัตถุประสงค์เชิงพฤติกรรม (K-P-A) เนื้อหา กิจกรรมการเรียนรู้ (ตามกระบวนการ MIAP 4 ขั้น) สื่อการสอน "
-        "และการวัดประเมินผล เพื่อให้การจัดการเรียนการสอนบรรลุผลลัพธ์การเรียนรู้ที่ตั้งไว้อย่างมีประสิทธิภาพ"
-    ),
-    "แผนการสอนทำยังไง": (
-        "การจัดทำแผนการสอนตามแบบฟอร์ม คณะครุศาสตร์อุตสาหกรรม มจพ. มีขั้นตอนหลักดังนี้:\n\n"
-        "1. กำหนดหัวข้อวิชา และเขียนวัตถุประสงค์เชิงพฤติกรรม (พุทธิพิสัย, ทักษะพิสัย, จิตพิสัย)\n"
-        "2. ออกแบบกิจกรรมการเรียนรู้ตามกระบวนการ MIAP 4 ขั้น:\n"
-        "   - M (Motivation): ขั้นสนใจปัญหา\n"
-        "   - I (Information): ขั้นบอกกล่าว/ให้ความรู้\n"
-        "   - A (Application): ขั้นพยายาม/ฝึกปฏิบัติ\n"
-        "   - P (Progress): ขั้นสำเร็จผล/ประเมินผล\n"
-        "3. จัดเตรียมสื่อและเอกสารประกอบ ได้แก่ แบบร่างกระดาน, ใบเนื้อหา, ใบงาน, ใบมอบหมายงาน และใบเฉลย"
-    ),
-    "ใบเนื้อหาคืออะไร": (
-        "ใบเนื้อหา (Information Sheet) คือ เอกสารประกอบการสอนที่สรุปสาระสำคัญ องค์ความรู้ ทฤษฎี หรือขั้นตอนการปฏิบัติ "
-        "เพื่อให้ผู้เรียนใช้ศึกษาประกอบในขั้นบอกกล่าว (I - Information) หรือใช้ทบทวนด้วยตนเอง "
-        "โดยส่วนหัวของแบบฟอร์ม มจพ. จะระบุชื่อเรื่อง, ชื่อวิชา, หมายเลขหน้า และหมายเลขแผ่น"
-    ),
-    "ใบงานคืออะไร": (
-        "ใบงาน (Work Sheet) คือ เอกสารคำสั่งหรือกิจกรรมที่มอบหมายให้ผู้เรียนฝึกปฏิบัติจริงในขั้นพยายาม (A - Application) "
-        "เพื่อพัฒนาทักษะการปฏิบัติงานตามขั้นตอนที่กำหนด มีเกณฑ์การให้คะแนนและการประเมินผลชัดเจน"
-    ),
-    "miapคืออะไร": (
-        "MIAP คือ รูปแบบกระบวนการจัดการเรียนการสอน 4 ขั้นตอนตามแนวทางของ มจพ. ได้แก่:\n"
-        "1. M - Motivation (ขั้นสนใจปัญหา): กระตุ้นความสนใจและเตรียมความพร้อมผู้เรียน\n"
-        "2. I - Information (ขั้นบอกกล่าว): ถ่ายทอดความรู้ ทฤษฎี หรือสาธิตขั้นตอนการทำงาน\n"
-        "3. A - Application (ขั้นพยายาม): ให้ผู้เรียนฝึกปฏิบัติหรือทำแบบฝึกหัดด้วยตนเอง\n"
-        "4. P - Progress (ขั้นสำเร็จผล): ตรวจสอบความถูกต้อง สรุปผล และประเมินผลการเรียนรู้"
-    )
-}
-
+# ค้นหาคำตอบจาก Dataset
 def search_qa(query: str):
     q_clean = clean_text(query)
     if not q_clean:
         return None, []
 
-    # 1. เช็กกับ Built-in Knowledge นิยามมาตรฐาน
-    for key, ans in BUILTIN_KNOWLEDGE.items():
-        if key in q_clean or q_clean in key:
-            return ans, []
-
-    # 2. เช็กความตรงเป๊ะ 100% กับคำถามใน Dataset (ตรงทั้งประโยค)
+    # 1. เช็กความตรงเป๊ะ 100% กับคำถามใน Dataset
     for item in ALL_QA_RECORDS:
         if q_clean == item["clean_q"]:
             return item["answer"], [item]
 
-    # 3. รวบรวมข้อใกล้เคียงสำหรับส่งให้ Gemini เป็น Context (ไม่ตอบมั่ว)
-    candidates = []
+    # 2. ค้นหาคำสำคัญเฉพาะกลุ่มวิชาการ มจพ.
     keywords = [
         "ใบเนื้อหา", "ใบงาน", "ใบมอบหมายงาน", "ใบแบบฝึกหัด", "ใบเฉลย",
         "miap", "kpa", "rubric", "วัตถุประสงค์เชิงพฤติกรรม", "ขั้นสนใจปัญหา", 
-        "ขั้นบอกกล่าว", "ขั้นพยายาม", "ขั้นสำเร็จผล", "แบบฟอร์ม", 
-        "แบบร่างกระดาน", "การประเมินผล"
+        "ขั้นบอกกล่าว", "ขั้นพยายาม", "ขั้นสำเร็จผล", "แบบร่างกระดาน"
     ]
     matched_kws = [kw for kw in keywords if kw in q_clean]
 
+    candidates = []
     for item in ALL_QA_RECORDS:
         score = 0
         q_target = item["clean_q"]
@@ -133,25 +94,27 @@ def search_qa(query: str):
     candidates.sort(key=lambda x: x[0], reverse=True)
     top_matches = [item for score, item in candidates[:3]]
 
-    # ถ้าผู้ใช้ถามคำถามที่มีข้อความเหมือนใน Dataset มากกว่า 80% ถึงจะตอบตรง
-    for item in ALL_QA_RECORDS:
-        if len(q_clean) >= 8 and (q_clean in item["clean_q"] or item["clean_q"] in q_clean):
-            # ป้องกันไม่ให้หยิบข้อสถาบันมาตอบคำถามนิยาม
-            if "หน่วยงาน" in item["clean_q"] or "สถาบัน" in item["clean_q"]:
-                continue
-            return item["answer"], [item]
+    # หากตรงคำสำคัญเฉพาะเจาะจง ให้ตอบตรง
+    if candidates and candidates[0][0] >= 5 and len(q_clean) >= 6:
+        return candidates[0][1]["answer"], top_matches
 
     return None, top_matches
 
+# โครงสร้างรับข้อมูล รองรับทั้ง message และ history
+class MessageItem(BaseModel):
+    role: str  # "user" หรือ "model" / "assistant"
+    text: str
+
 class ChatRequest(BaseModel):
     message: str
+    history: Optional[List[MessageItem]] = []
 
 @app.get("/")
 def read_root():
     return {
         "status": "ok", 
         "total_records": len(ALL_QA_RECORDS),
-        "message": "KMUTNB Lesson Chatbot is ready"
+        "message": "KMUTNB Lesson Chatbot with Context Memory is ready"
     }
 
 @app.post("/chat")
@@ -165,29 +128,49 @@ def chat_endpoint(req: ChatRequest):
             "reply": "สวัสดีครับ! ผมคือ AI ผู้ช่วยตรวจสอบและแนะนำวิธีการจัดทำแผนการจัดการเรียนรู้ มจพ. สอบถามโครงสร้างแผน ขั้นตอน MIAP หรือเอกสารประกอบการสอนได้เลยครับ"
         }
 
+    # ตรวจสอบว่าในคำถามเดี่ยวๆ มีใน Dataset เป๊ะๆ หรือไม่
     matched_answer, matched_items = search_qa(user_msg)
-    if matched_answer:
+    
+    # ถ้าไม่มีประวัติบทสนทนา และเจอใน Dataset เป๊ะ ให้ตอบทันที
+    if matched_answer and not req.history:
         return {"source": "dataset", "reply": matched_answer}
 
-    # ส่งบริบทอ้างอิงให้ Gemini
-    context_lines = [f"- คำถามในเอกสาร: {m['question']}\n  คำตอบ: {m['answer']}" for m in matched_items]
-    context_text = "\n".join(context_lines) if context_lines else "ข้อมูลทั่วไปเกี่ยวกับแผนการจัดการเรียนรู้ มจพ."
+    # แปลงประวัติการคุยเป็นข้อความบริบท
+    history_context = ""
+    if req.history:
+        history_lines = []
+        for h in req.history[-6:]:  # จดจำย้อนหลัง 6 ข้อความล่าสุด
+            speaker = "ผู้ใช้" if h.role in ["user", "human"] else "บอท"
+            history_lines.append(f"{speaker}: {h.text}")
+        history_context = "ประวัติบทสนทนาก่อนหน้านี้:\n" + "\n".join(history_lines) + "\n\n"
 
-    prompt_content = f"""คุณคือ AI ผู้เชี่ยวชาญการจัดทำแผนการจัดการเรียนรู้ คณะครุศาสตร์อุตสาหกรรม มหาวิทยาลัยเทคโนโลยีพระจอมเกล้าพระนครเหนือ (มจพ.)
-จงตอบคำถามต่อไปนี้อย่างถูกต้องตามหลักวิชาการ ชัดเจน สุภาพ และเข้าใจง่าย
+    # รวบรวมข้อมูลอ้างอิงจาก Dataset
+    context_lines = [f"- {m['question']} -> {m['answer']}" for m in matched_items]
+    reference_context = "ข้อมูลอ้างอิงหลักสูตร/แบบฟอร์ม มจพ.:\n" + "\n".join(context_lines) if context_lines else ""
 
-ข้อมูลอ้างอิง:
-{context_text}
+    prompt_content = f"""คุณคือ AI ผู้ช่วยจัดทำแผนการจัดการเรียนรู้ คณะครุศาสตร์อุตสาหกรรม มหาวิทยาลัยเทคโนโลยีพระจอมเกล้าพระนครเหนือ (มจพ.)
+หน้าที่ของคุณ: ตอบคำถามผู้ใช้อย่างต่อเนื่อง ให้สอดคล้องกับเรื่องที่กำลังคุยกันในบริบทก่อนหน้า ถูกต้องตามหลักวิชาการ กระชับ และสุภาพ
 
-คำถาม: {user_msg}
+{history_context}{reference_context}
+
+คำถามล่าสุดของผู้ใช้: {user_msg}
+
+แนวทางการตอบ:
+1. หากผู้ใช้ถามสั้นๆ หรือถามต่อยอด (เช่น "ขั้นตอนการทำมีอะไรบ้าง", "มีอะไรอีก", "แล้วอันนี้ล่ะ") ให้อนุมานจากบริบทก่อนหน้า (เช่น หากเพิ่งคุยเรื่องแผนการสอน ให้ตอบขั้นตอนการจัดทำแผนการสอน 4 ขั้นตอน MIAP และองค์ประกอบเอกสาร)
+2. โครงสร้าง MIAP ของ มจพ.:
+   - M (Motivation): ขั้นสนใจปัญหา
+   - I (Information): ขั้นบอกกล่าว/ให้ข้อมูล
+   - A (Application): ขั้นพยายาม/ปฏิบัติ
+   - P (Progress): ขั้นสำเร็จผล/ประเมินผล
+3. ตอบเป็นข้อๆ ชัดเจน เข้าใจง่าย
 """
 
     try:
         api_key = os.getenv("GEMINI_API_KEY", "").strip()
         if not api_key:
-            if matched_items:
-                return {"source": "dataset_fallback", "reply": matched_items[0]["answer"]}
-            return {"source": "default", "reply": "กรุณาสอบถามเกี่ยวกับโครงสร้างแผนการสอน มจพ., ขั้นตอน MIAP หรือเอกสารแนบท้ายได้เลยครับ"}
+            if matched_answer:
+                return {"source": "dataset_fallback", "reply": matched_answer}
+            return {"source": "default", "reply": "กรุณาสอบถามเกี่ยวกับโครงสร้างแผนการสอน มจพ. หรือกระบวนการสอน MIAP ได้เลยครับ"}
 
         client = genai.Client(api_key=api_key)
         interaction = client.interactions.create(
@@ -197,9 +180,24 @@ def chat_endpoint(req: ChatRequest):
         return {"source": "gemini-3.8-flash", "reply": interaction.output_text}
 
     except Exception:
-        if matched_items:
-            return {"source": "dataset_fallback", "reply": matched_items[0]["answer"]}
+        # Fallback กรณีคำถามยอดฮิตแต่ Gemini ขัดข้อง
+        if "ขั้นตอน" in clean_msg:
+            return {
+                "source": "fallback_context",
+                "reply": (
+                    "ขั้นตอนการจัดทำแผนการจัดการเรียนรู้ตามแบบฟอร์ม มจพ. มีดังนี้ครับ:\n\n"
+                    "1. กำหนดหัวข้อวิชาและเขียนวัตถุประสงค์เชิงพฤติกรรม (พุทธิพิสัย, ทักษะพิสัย, จิตพิสัย)\n"
+                    "2. ออกแบบกิจกรรมการเรียนรู้ตามกระบวนการ MIAP 4 ขั้น:\n"
+                    "   - M (Motivation): ขั้นสนใจปัญหา\n"
+                    "   - I (Information): ขั้นบอกกล่าว\n"
+                    "   - A (Application): ขั้นพยายาม\n"
+                    "   - P (Progress): ขั้นสำเร็จผล\n"
+                    "3. จัดทำเอกสารแนบท้าย ได้แก่ แบบร่างกระดาน, ใบเนื้อหา, ใบงาน, ใบมอบหมายงาน และใบเฉลย"
+                )
+            }
+        if matched_answer:
+            return {"source": "dataset_fallback", "reply": matched_answer}
         return {
             "source": "default",
-            "reply": "สามารถสอบถามเกี่ยวกับแบบฟอร์มแผนการสอน มจพ., กระบวนการ MIAP (Motivation, Information, Application, Progress) หรือเอกสารประกอบการสอนได้เลยครับ"
+            "reply": "สามารถสอบถามเพิ่มเติมเกี่ยวกับแบบฟอร์มแผนการสอน มจพ., กระบวนการ MIAP หรือเอกสารแนบท้ายได้เลยครับ"
         }
