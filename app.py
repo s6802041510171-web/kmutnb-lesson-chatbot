@@ -85,18 +85,17 @@ def chat_endpoint(req: ChatRequest):
         )
         if results and "documents" in results and results["documents"]:
             docs = results["documents"][0]
-            metas = results["metadatas"][0]
+            metas = results["metadatas"][0] if "metadatas" in results and results["metadatas"] else []
             distances = results["distances"][0] if "distances" in results and results["distances"] else [1.0] * len(docs)
 
             best_dist = distances[0] if distances else 1.0
 
             for doc, meta in zip(docs, metas):
-                q_ref = meta.get("question", doc)
-                ans = meta.get("answer", "")
+                q_ref = meta.get("question", doc) if meta else doc
+                ans = meta.get("answer", "") if meta else ""
                 matched_texts.append(f"- คำถาม: {q_ref}\n  คำตอบ: {ans}")
 
-            # ถ้าคะแนนความแม่นยำสูงมาก ให้ตอบตรงทันที
-            if best_dist < 0.25 and metas:
+            if best_dist < 0.25 and metas and metas[0].get("answer"):
                 best_answer = metas[0].get("answer")
     except Exception as e:
         print(f"ChromaDB Query Error: {e}")
@@ -107,7 +106,7 @@ def chat_endpoint(req: ChatRequest):
             "reply": best_answer
         }
 
-    # --- ด่านที่ 3: สังเคราะห์คำตอบผ่าน AI + บันทึกจำคำตอบให้อัตโนมัติ ---
+    # --- ด่านที่ 3: สังเคราะห์คำตอบผ่าน AI ---
     context = "\n".join(matched_texts) if matched_texts else "ไม่มีข้อมูลที่ตรงกันโดยตรง"
 
     prompt_content = f"""คุณคือ AI ผู้เชี่ยวชาญการจัดทำแผนการจัดการเรียนรู้ คณะครุศาสตร์อุตสาหกรรม มจพ.
@@ -125,24 +124,25 @@ def chat_endpoint(req: ChatRequest):
 """
 
     try:
-        if not client:
-            raise ValueError("GEMINI_API_KEY is not set")
+        current_api_key = os.getenv("GEMINI_API_KEY", "").strip()
+        if not current_api_key:
+            return {"source": "error", "reply": "ระบบขัดข้อง: ไม่พบคีย์ GEMINI_API_KEY ใน Render Environment"}
 
-        response = client.models.generate_content(
+        ai_client = genai.Client(api_key=current_api_key)
+        response = ai_client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt_content
         )
         reply = response.text
 
-        # 🧠 ระบบ Self-Learning: ถ้าคำตอบสมบูรณ์ ให้ AI บันทึกคำถามและคำตอบนี้เข้าฐานข้อมูลทันที
-        if reply and len(reply) > 15 and "ขออภัย" not in reply:
+        if reply and len(reply) > 10 and "ขออภัย" not in reply:
             auto_learn(user_msg, reply)
 
         return {"source": "gemini_learned", "reply": reply}
 
     except Exception as e:
-        print(f"Gemini API Error: {e}")
-        # Fallback หาก API มีปัญหาหรือโควตาเต็ม
+        error_msg = str(e)
+        print(f"Gemini API Error: {error_msg}")
         if metas and metas[0].get("answer"):
             return {"source": "vector_fallback", "reply": metas[0].get("answer")}
-        return {"source": "error", "reply": "ขออภัยครับ ยังไม่พบข้อมูลที่ตรงกับคำถามนี้ในระบบ"}
+        return {"source": "error", "reply": f"เกิดข้อผิดพลาดจาก AI: {error_msg}"}
