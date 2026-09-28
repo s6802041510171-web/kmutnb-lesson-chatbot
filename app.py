@@ -6,19 +6,20 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import chromadb
-from chromadb.utils import embedding_functions
 from google import genai
 
 app = FastAPI()
 
+# เปิดสิทธิ์ CORS ให้ Vercel ยิงเข้ามาได้ครบถ้วน
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 1. เชื่อมต่อฐานข้อมูล ChromaDB
+# 1. เชื่อมต่อฐานข้อมูล ChromaDB (แบบเบา ไม่กิน RAM)
 DB_PATH = "./chroma_data"
 chroma_client = chromadb.PersistentClient(path=DB_PATH)
 collection = chroma_client.get_or_create_collection(
@@ -29,7 +30,7 @@ collection = chroma_client.get_or_create_collection(
 api_key = os.getenv("GEMINI_API_KEY", "")
 client = genai.Client(api_key=api_key) if api_key else None
 
-# ไฟล์สำหรับเก็บคำตอบที่บอทเรียนรู้ด้วยตัวเองแบบถาวร
+# ไฟล์สำหรับเก็บคำตอบที่บอทเรียนรู้ด้วยตัวเอง
 LEARNED_FILE = "learned_qa.csv"
 if not os.path.exists(LEARNED_FILE):
     with open(LEARNED_FILE, mode="w", encoding="utf-8-sig", newline="") as f:
@@ -56,6 +57,10 @@ def auto_learn(question: str, answer: str):
 class ChatRequest(BaseModel):
     message: str
 
+@app.get("/")
+def read_root():
+    return {"status": "ok", "message": "KMUTNB Lesson Chatbot Backend is running live"}
+
 @app.post("/chat")
 def chat_endpoint(req: ChatRequest):
     user_msg = req.message.strip()
@@ -68,32 +73,33 @@ def chat_endpoint(req: ChatRequest):
             "reply": "สวัสดีครับ! ผมคือ AI ผู้ช่วยตรวจสอบและแนะนำแผนการจัดการเรียนรู้ (มจพ.) สอบถามข้อมูลโครงสร้างแผน MIAP หรือเอกสารประกอบได้เลยครับ"
         }
 
-    # --- ด่านที่ 2: ดึงข้อมูลจาก ChromaDB (ดึง Top 4 เพื่อความแม่นยำ) ---
-    results = collection.query(
-        query_texts=[user_msg],
-        n_results=4
-    )
-
+    # --- ด่านที่ 2: ดึงข้อมูลจาก ChromaDB ---
     matched_texts = []
     best_answer = None
-    best_dist = 1.0
+    metas = []
 
-    if results and "documents" in results and results["documents"]:
-        docs = results["documents"][0]
-        metas = results["metadatas"][0]
-        distances = results["distances"][0] if "distances" in results and results["distances"] else [1.0]*len(docs)
+    try:
+        results = collection.query(
+            query_texts=[user_msg],
+            n_results=4
+        )
+        if results and "documents" in results and results["documents"]:
+            docs = results["documents"][0]
+            metas = results["metadatas"][0]
+            distances = results["distances"][0] if "distances" in results and results["distances"] else [1.0] * len(docs)
 
-        if distances:
-            best_dist = distances[0]
+            best_dist = distances[0] if distances else 1.0
 
-        for doc, meta in zip(docs, metas):
-            q_ref = meta.get("question", doc)
-            ans = meta.get("answer", "")
-            matched_texts.append(f"- คำถาม: {q_ref}\n  คำตอบ: {ans}")
+            for doc, meta in zip(docs, metas):
+                q_ref = meta.get("question", doc)
+                ans = meta.get("answer", "")
+                matched_texts.append(f"- คำถาม: {q_ref}\n  คำตอบ: {ans}")
 
-        # ถ้าคะแนนความแม่นยำสูงมาก ให้ตอบตรงทันที
-        if best_dist < 0.25 and metas:
-            best_answer = metas[0].get("answer")
+            # ถ้าคะแนนความแม่นยำสูงมาก ให้ตอบตรงทันที
+            if best_dist < 0.25 and metas:
+                best_answer = metas[0].get("answer")
+    except Exception as e:
+        print(f"ChromaDB Query Error: {e}")
 
     if best_answer:
         return {
@@ -119,18 +125,23 @@ def chat_endpoint(req: ChatRequest):
 """
 
     try:
-        interaction = client.interactions.create(
-            model="gemini-3.8-flash",
-            input=prompt_content
+        if not client:
+            raise ValueError("GEMINI_API_KEY is not set")
+
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt_content
         )
-        reply = interaction.output_text
+        reply = response.text
 
         # 🧠 ระบบ Self-Learning: ถ้าคำตอบสมบูรณ์ ให้ AI บันทึกคำถามและคำตอบนี้เข้าฐานข้อมูลทันที
-        if len(reply) > 15 and "ขออภัย" not in reply:
+        if reply and len(reply) > 15 and "ขออภัย" not in reply:
             auto_learn(user_msg, reply)
 
-        return {"source": "gemini-3.8-flash_learned", "reply": reply}
+        return {"source": "gemini_learned", "reply": reply}
+
     except Exception as e:
+        print(f"Gemini API Error: {e}")
         # Fallback หาก API มีปัญหาหรือโควตาเต็ม
         if metas and metas[0].get("answer"):
             return {"source": "vector_fallback", "reply": metas[0].get("answer")}
