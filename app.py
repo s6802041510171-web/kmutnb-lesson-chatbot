@@ -66,17 +66,23 @@ def search_qa(query: str):
     if not q_clean:
         return None, []
 
-    # 1. เช็กความตรงแบบคำถามตรงกันหรือซ้อนอยู่
+    # 1. เช็กความตรงแบบเป๊ะๆ 100% (ถ้าถามตรงกับหัวข้อใน Dataset เป๊ะ ให้ตอบทันที)
     for item in ALL_QA_RECORDS:
-        if q_clean == item["clean_q"] or (len(q_clean) >= 4 and (q_clean in item["clean_q"] or item["clean_q"] in q_clean)):
+        if q_clean == item["clean_q"]:
             return item["answer"], [item]
 
-    # 2. ค้นหาคำสำคัญเฉพาะกลุ่มวิชาการ มจพ.
+    # 2. ตรวจสอบว่าคำถามเป็นเชิงนิยามหรือคำถามปลายเปิดหรือไม่
+    # เช่น "คืออะไร", "หมายถึง", "อธิบาย", "มีอะไรบ้าง", "ทำไม", "ยังไง"
+    is_explanatory_query = any(k in q_clean for k in [
+        "คืออะไร", "คือ", "หมายถึง", "อธิบาย", "มีอะไรบ้าง", "อย่างไร", "ยังไง", "ทำไม", "บทบาท", "สำคัญอย่างไร"
+    ])
+
+    # 3. รวบรวมข้อมูลบริบทที่เกี่ยวข้องจาก Dataset ทั้ง 1,001 รายการ
     keywords = [
         "ใบเนื้อหา", "ใบงาน", "ใบมอบหมายงาน", "ใบแบบฝึกหัด", "ใบเฉลย",
         "miap", "kpa", "rubric", "วัตถุประสงค์", "ขั้นสนใจปัญหา", 
         "ขั้นบอกกล่าว", "ขั้นพยายาม", "ขั้นสำเร็จผล", "แบบฟอร์ม", 
-        "แผนการสอน", "แผนการจัดการเรียนรู้", "พฤติกรรม", "โครงสร้าง"
+        "แผนการสอน", "แผนการจัดการเรียนรู้", "พฤติกรรม", "โครงสร้าง", "นำเข้าสู่บทเรียน"
     ]
     matched_kws = [kw for kw in keywords if kw in q_clean]
 
@@ -91,23 +97,17 @@ def search_qa(query: str):
             candidates.append((score, item))
 
     candidates.sort(key=lambda x: x[0], reverse=True)
-    top_matches = [item for score, item in candidates[:3]]
+    top_matches = [item for score, item in candidates[:4]]
 
+    # หากเป็นคำถามเชิงนิยาม ให้ส่งต่อไปสังเคราะห์ด้วย Gemini โดยแนบบริบทที่ค้นเจอไปด้วย
+    if is_explanatory_query:
+        return None, top_matches
+
+    # ถ้าไม่ใช่คำถามนิยาม และคำถามตรงกับในไฟล์มาก ให้ตอบตรง
     if candidates and candidates[0][0] >= 5:
         return candidates[0][1]["answer"], top_matches
 
-    # 3. ตรวจสอบความคล้ายตัวอักษรภาษาไทย
-    fallback_candidates = []
-    for item in ALL_QA_RECORDS:
-        common_len = sum(1 for ch in set(q_clean) if ch in item["clean_q"])
-        if common_len >= 5:
-            fallback_candidates.append((common_len, item))
-            
-    fallback_candidates.sort(key=lambda x: x[0], reverse=True)
-    if fallback_candidates:
-        return fallback_candidates[0][1]["answer"], [fallback_candidates[0][1]]
-
-    return None, []
+    return None, top_matches
 
 class ChatRequest(BaseModel):
     message: str
@@ -131,28 +131,32 @@ def chat_endpoint(req: ChatRequest):
             "reply": "สวัสดีครับ! ผมคือ AI ผู้ช่วยตรวจสอบและแนะนำวิธีการจัดทำแผนการจัดการเรียนรู้ มจพ. สอบถามโครงสร้างแผน ขั้นตอน MIAP หรือเกณฑ์วัดผลได้เลยครับ"
         }
 
-    # ค้นหาจาก Dataset ทั้ง 1,001 ข้อ
     matched_answer, matched_items = search_qa(user_msg)
     if matched_answer:
         return {"source": "dataset", "reply": matched_answer}
 
-    # หากไม่ตรงใน Dataset ให้สังเคราะห์ผ่าน Gemini 2.0 Flash (1,500 requests/day)
-    context_text = "\n".join([f"- ถาม: {m['question']}\n  ตอบ: {m['answer']}" for m in matched_items]) if matched_items else ""
-    prompt_content = f"""คุณคือ AI ผู้เชี่ยวชาญการจัดทำแผนการจัดการเรียนรู้ คณะครุศาสตร์อุตสาหกรรม มหาวิทยาลัยเทคโนโลยีพระจอมเกล้าพระนครเหนือ (มจพ.)
-หน้าที่ของคุณ: ตอบคำถามผู้ใช้ให้ถูกต้องตามหลักวิชาการ กระชับ ตรงประเด็น และสุภาพ
+    # รวบรวมข้อมูลอ้างอิงจาก Dataset ส่งเป็น Context ให้ Gemini
+    context_lines = []
+    for m in matched_items:
+        context_lines.append(f"- ข้อมูลอ้างอิงในเอกสาร: {m['question']} -> {m['answer']}")
+    context_text = "\n".join(context_lines) if context_lines else "ไม่มีข้อมูลเฉพาะเจาะจงในแบบฟอร์ม"
 
-ข้อมูลอ้างอิง:
+    prompt_content = f"""คุณคือ AI ผู้เชี่ยวชาญการจัดทำแผนการจัดการเรียนรู้ คณะครุศาสตร์อุตสาหกรรม มหาวิทยาลัยเทคโนโลยีพระจอมเกล้าพระนครเหนือ (มจพ.)
+หน้าที่ของคุณ: อธิบายและตอบคำถามผู้ใช้ให้ถูกต้องตามหลักวิชาการ เข้าใจง่าย กระชับ ตรงประเด็น และสุภาพ
+
+ข้อมูลอ้างอิงจากแบบฟอร์มและเอกสารของ มจพ.:
 {context_text}
 
 คำถามของผู้ใช้: {user_msg}
 
-ข้อกำหนดสำคัญ:
-1. หากคำถามถามถึง "MIAP":
+แนวทางการตอบ:
+1. หากผู้ใช้ถามนิยาม (เช่น "ใบเนื้อหาคืออะไร", "ใบงานคืออะไร"): ให้อธิบายความหมาย ประโยชน์ หน้าที่ในกระบวนการสอน (เช่น ใช้ในขั้น Information: I) และอ้างอิงองค์ประกอบตามแบบฟอร์ม มจพ. ให้ครบถ้วน
+2. หากถามถึง "MIAP" หรือ "ขั้นการสอน 4 ขั้น":
    - M = Motivation (ขั้นสนใจปัญหา)
    - I = Information (ขั้นบอกกล่าว)
    - A = Application (ขั้นพยายาม)
    - P = Progress (ขั้นสำเร็จผล)
-2. หากถามถึงเอกสารประกอบ เช่น ใบเนื้อหา ให้ระบุองค์ประกอบสำคัญ (ชื่อเรื่อง, วิชา, หมายเลขหน้า/แผ่น และเนื้อหาที่สอน)
+3. สรุปเป็นข้อๆ ให้อ่านง่าย สละสลวย
 """
 
     try:
@@ -160,7 +164,7 @@ def chat_endpoint(req: ChatRequest):
         if not api_key:
             if matched_items:
                 return {"source": "dataset_fallback", "reply": matched_items[0]["answer"]}
-            return {"source": "error", "reply": "ขออภัยครับ ยังไม่พบข้อมูลที่ตรงกับคำถามนี้ในระบบ"}
+            return {"source": "error", "reply": "ขออภัยครับ ยังไม่พบคีย์สำหรับประมวลผลคำตอบ"}
 
         client = genai.Client(api_key=api_key)
         response = client.models.generate_content(
@@ -174,5 +178,5 @@ def chat_endpoint(req: ChatRequest):
             return {"source": "dataset_fallback", "reply": matched_items[0]["answer"]}
         return {
             "source": "error",
-            "reply": f"เกิดข้อผิดพลาดในการประมวลผล: {e}"
+            "reply": f"เกิดข้อผิดพลาดในการประมวลผลคำตอบ: {e}"
         }
