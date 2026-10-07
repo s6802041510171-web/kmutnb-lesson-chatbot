@@ -1,11 +1,12 @@
 import os
 import re
-import pandas as pd
 from typing import List, Optional, Any
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import OpenAI
+import chromadb
+from chromadb.utils import embedding_functions
 
 app = FastAPI()
 
@@ -17,49 +18,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-ALL_QA_RECORDS = []
-
-def clean_text(text: str) -> str:
-    text = str(text).lower()
-    text = re.sub(r"[^\wก-๙]", "", text)
-    return text.strip()
-
-def load_all_datasets():
-    global ALL_QA_RECORDS
-    ALL_QA_RECORDS = []
-    
-    file_path = "QA_Dataset_1000_Chatbot.xlsx"
-    if not os.path.exists(file_path):
-        print(f"Warning: {file_path} not found!")
-        return
-
-    try:
-        df = pd.read_excel(file_path, engine="openpyxl")
-        q_col = next((c for c in df.columns if str(c).strip().lower() in ["คำถาม", "question", "q"]), None)
-        a_col = next((c for c in df.columns if str(c).strip().lower() in ["คำตอบ", "answer", "a"]), None)
-        cat_col = next((c for c in df.columns if str(c).strip().lower() in ["หมวดหมู่", "category"]), None)
-
-        if q_col and a_col:
-            for _, row in df.iterrows():
-                q = str(row.get(q_col, "")).strip()
-                a = str(row.get(a_col, "")).strip()
-                cat = str(row.get(cat_col, "")).strip() if cat_col else ""
-                
-                if q and a and q.lower() != "nan" and a.lower() != "nan":
-                    ALL_QA_RECORDS.append({
-                        "question": q,
-                        "clean_q": clean_text(q),
-                        "answer": a,
-                        "category": cat
-                    })
-        print(f"Loaded {len(ALL_QA_RECORDS)} records successfully.")
-    except Exception as e:
-        print(f"Error loading {file_path}: {e}")
-
-# โหลดข้อมูลหลังเซิร์ฟเวอร์เปิดพอร์ตสำเร็จ
-@app.on_event("startup")
-async def startup_event():
-    load_all_datasets()
+# Initialize ChromaDB
+chroma_client = chromadb.PersistentClient(path="./chroma_data")
+emb_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
+    model_name="paraphrase-multilingual-MiniLM-L12-v2"
+)
+collection = chroma_client.get_collection(
+    name="lesson_qa_collection",
+    embedding_function=emb_fn
+)
 
 KNOWLEDGE_BASE = {
     "แผนการสอนคืออะไร": (
@@ -76,15 +43,13 @@ KNOWLEDGE_BASE = {
         "   - A (Application): ขั้นพยายาม/ฝึกปฏิบัติ\n"
         "   - P (Progress): ขั้นสำเร็จผล/ประเมินผล\n"
         "3. จัดเตรียมสื่อและเอกสารแนบท้ายแผน ได้แก่ แบบร่างกระดาน, ใบเนื้อหา, ใบงาน, ใบมอบหมายงาน และใบเฉลย"
-    ),
-    "ขั้นตอนการทำ": (
-        "ขั้นตอนการจัดทำแผนการจัดการเรียนรู้ มจพ. ประกอบด้วย 4 ขั้นตอนหลัก (MIAP):\n"
-        "1. ขั้นสนใจปัญหา (Motivation) - กระตุ้นความสนใจและนำเข้าสู่บทเรียน\n"
-        "2. ขั้นบอกกล่าว (Information) - ให้ความรู้ ทฤษฎี หรือสาธิตขั้นตอนการทำงาน\n"
-        "3. ขั้นพยายาม (Application) - ให้ผู้เรียนฝึกปฏิบัติจริงตามใบงาน\n"
-        "4. ขั้นสำเร็จผล (Progress) - สรุปผล ตรวจประเมินผลงาน และให้ข้อเสนอแนะ"
     )
 }
+
+def clean_text(text: str) -> str:
+    text = str(text).lower()
+    text = re.sub(r"[^\wก-๙]", "", text)
+    return text.strip()
 
 def search_qa(query: str):
     q_clean = clean_text(query)
@@ -95,29 +60,35 @@ def search_qa(query: str):
         if clean_text(k) in q_clean or q_clean in clean_text(k):
             return v, []
 
-    for item in ALL_QA_RECORDS:
-        if q_clean == item["clean_q"]:
-            return item["answer"], [item]
+    # Search ChromaDB Vector Database
+    results = collection.query(
+        query_texts=[query],
+        n_results=3
+    )
 
-    for item in ALL_QA_RECORDS:
-        if len(q_clean) >= 4 and (q_clean in item["clean_q"] or item["clean_q"] in q_clean):
-            return item["answer"], [item]
+    matched_items = []
+    if results['documents'] and results['documents'][0]:
+        distances = results['distances'][0]
+        docs = results['documents'][0]
+        metas = results['metadatas'][0]
+        
+        best_distance = distances[0]
+        best_meta = metas[0]
+        
+        for doc, meta, dist in zip(docs, metas, distances):
+            matched_items.append({
+                "question": doc,
+                "answer": meta["answer"]
+            })
+            
+        # Distance threshold (cosine distance)
+        # If very close, return it directly
+        if best_distance < 0.4:
+            return best_meta["answer"], matched_items
+            
+        return None, matched_items
 
-    candidates = []
-    for item in ALL_QA_RECORDS:
-        score = 0
-        target = item["clean_q"]
-        for word in q_clean.split():
-            if len(word) >= 2 and word in target:
-                score += 3
-        if score > 0:
-            candidates.append((score, item))
-
-    candidates.sort(key=lambda x: x[0], reverse=True)
-    if candidates and candidates[0][0] >= 3:
-        return candidates[0][1]["answer"], [item for _, item in candidates[:3]]
-
-    return None, [item for _, item in candidates[:3]]
+    return None, []
 
 class ChatRequest(BaseModel):
     message: str
@@ -125,10 +96,11 @@ class ChatRequest(BaseModel):
 
 @app.get("/")
 def read_root():
+    total = collection.count()
     return {
         "status": "ok", 
-        "total_records": len(ALL_QA_RECORDS),
-        "source_file": "QA_Dataset_1000_Chatbot.xlsx"
+        "total_records_in_db": total,
+        "source": "chromadb vector index"
     }
 
 @app.post("/chat")
@@ -139,7 +111,7 @@ async def chat_endpoint(req: ChatRequest):
     if re.search(r"^(สวัสดี|หวัดดี|ดีครับ|ดีค่ะ|hello|hi)$", clean_msg):
         return {
             "source": "rule_based",
-            "reply": "สวัสดีครับ! ผมคือ AI ผู้ช่วยจัดทำแผนการจัดการเรียนรู้ มจพ. สอบถามขั้นตอนการสอน MIAP หรือเอกสารประกอบแผนได้เลยครับ"
+            "reply": "สวัสดีครับ! ผมคือ AI ผู้ช่วย แชทบอท สอบถามข้อมูลรายวิชาได้เลยครับ"
         }
 
     history_messages = []
@@ -152,20 +124,21 @@ async def chat_endpoint(req: ChatRequest):
                     history_messages.append({"role": role, "content": content})
 
     is_followup = any(w in clean_msg for w in ["แล้วทำยังไง", "ทำยังไง", "ทำอย่างไร", "ขั้นตอน", "ยังไงต่อ", "มีอะไรบ้าง"])
-    effective_query = "ขั้นตอนการทำแผนการสอน" if (is_followup and len(clean_msg) < 18) else user_msg
+    effective_query = "ขั้นตอนการทำ" if (is_followup and len(clean_msg) < 18) else user_msg
 
     matched_answer, matched_items = search_qa(effective_query)
+    
     if matched_answer and not req.history:
         return {"source": "dataset", "reply": matched_answer}
 
-    context_lines = [f"- {m['question']} -> {m['answer']}" for m in matched_items]
-    reference_context = "\n".join(context_lines) if context_lines else "ข้อมูลทั่วไปเกี่ยวกับแผนการจัดการเรียนรู้ มจพ."
+    context_lines = [f"- คำถาม: {m['question']}\n  คำตอบ: {m['answer']}" for m in matched_items]
+    reference_context = "\n".join(context_lines) if context_lines else "ไม่มีข้อมูลที่เกี่ยวข้องโดยตรง"
 
-    system_instruction = f"""คุณคือ AI ผู้เชี่ยวชาญการจัดทำแผนการจัดการเรียนรู้ คณะครุศาสตร์อุตสาหกรรม มหาวิทยาลัยเทคโนโลยีพระจอมเกล้าพระนครเหนือ (มจพ.)
-หน้าที่ของคุณคือตอบคำถามผู้ใช้อย่างถูกต้องตามหลักวิชาการ สุภาพ ชัดเจน และต่อเนื่องกับบริบทบทสนทนา
-ใช้กระบวนการสอน MIAP 4 ขั้น (Motivation, Information, Application, Progress) เป็นหลัก
+    system_instruction = f"""คุณคือ AI ผู้ช่วยอัจฉริยะ ตอบคำถามผู้ใช้อย่างถูกต้อง ชัดเจน และตรงไปตรงมาอิงตามข้อมูลอ้างอิง
+หากคำถามเกี่ยวข้องกับข้อมูลด้านล่าง ให้นำมาตอบให้เป็นธรรมชาติ
+หากไม่มีข้อมูลในอ้างอิง ให้ตอบไปตามบริบทบทสนทนา หรือตอบว่าไม่มีข้อมูล
 
-ข้อมูลอ้างอิง:
+ข้อมูลอ้างอิง (Context):
 {reference_context}
 """
 
@@ -174,11 +147,14 @@ async def chat_endpoint(req: ChatRequest):
     messages_payload.append({"role": "user", "content": user_msg})
 
     try:
-        api_key = os.getenv("TYPHOON_API_KEY", "").strip()
+        api_key = os.getenv("TYPHOON_API_KEY", "sk-Xwwd92TNALivvIrvkwBTR5wN22NRUyIWB6tv4lq1tVWWXCbd").strip()
         if not api_key:
             if matched_answer:
                 return {"source": "dataset_fallback", "reply": matched_answer}
-            return {"source": "builtin", "reply": KNOWLEDGE_BASE["แผนการสอนทำยังไง"]}
+            elif matched_items:
+                # Add a prefix so the user knows it's an imperfect match
+                return {"source": "dataset_fallback", "reply": f"(ไม่พบคำถามที่ตรงกัน 100% และไม่มี API Key สำหรับ AI) \n\nคำตอบจากหัวข้อที่ใกล้เคียงที่สุด:\n{matched_items[0]['answer']}"}
+            return {"source": "builtin", "reply": "ระบบไม่มีข้อมูลที่เกี่ยวข้องสำหรับคำถามนี้ และยังไม่ได้ตั้งค่า API Key สำหรับ AI ครับ"}
 
         client = OpenAI(
             api_key=api_key,
@@ -186,7 +162,7 @@ async def chat_endpoint(req: ChatRequest):
         )
 
         response = client.chat.completions.create(
-            model="typhoon-v1.5x-70b-instruct",
+            model="typhoon-v2.5-30b-a3b-instruct",
             messages=messages_payload,
             temperature=0.4,
             max_tokens=1000
@@ -197,13 +173,11 @@ async def chat_endpoint(req: ChatRequest):
 
     except Exception as e:
         print(f"Typhoon API error: {e}")
-        if is_followup or "ทำยังไง" in clean_msg or "ขั้นตอน" in clean_msg:
-            return {"source": "builtin", "reply": KNOWLEDGE_BASE["แผนการสอนทำยังไง"]}
         if matched_answer:
             return {"source": "dataset_fallback", "reply": matched_answer}
         return {
             "source": "fallback",
-            "reply": "สามารถสอบถามเพิ่มเติมเกี่ยวกับแบบฟอร์มแผนการสอน มจพ., กระบวนการ MIAP หรือเอกสารแนบท้ายได้เลยครับ"
+            "reply": "ขออภัย เกิดข้อผิดพลาดในการเชื่อมต่อกับ AI"
         }
 
 if __name__ == "__main__":
