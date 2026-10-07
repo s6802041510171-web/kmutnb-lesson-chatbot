@@ -4,3 +4,5 @@ pandas
 openpyxl
 openai
 pydantic
+chromadb
+python-dotenv
