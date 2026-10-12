@@ -1,9 +1,6 @@
 fastapi
 uvicorn
-pandas
 openpyxl
 openai
 pydantic
-chromadb
 python-dotenv
-sentence-transformers

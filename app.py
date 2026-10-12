@@ -7,8 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from openai import OpenAI
-import chromadb
-from chromadb.utils import embedding_functions
+from openpyxl import load_workbook
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -24,15 +23,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize ChromaDB
-chroma_client = chromadb.PersistentClient(path=str(BASE_DIR / "chroma_data"))
-emb_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="paraphrase-multilingual-MiniLM-L12-v2"
-)
-collection = chroma_client.get_collection(
-    name="lesson_qa_collection",
-    embedding_function=emb_fn
-)
+def load_dataset():
+    """Load the compact Q&A workbook without a heavyweight ML runtime."""
+    workbook = load_workbook(BASE_DIR / "dataset.xlsx", read_only=True, data_only=True)
+    sheet = workbook.active
+    rows = sheet.iter_rows(values_only=True)
+    headers = next(rows, ())
+    header_names = [str(value or "").strip().lower() for value in headers]
+
+    try:
+        question_index = header_names.index("question")
+        answer_index = header_names.index("answer")
+    except ValueError as exc:
+        workbook.close()
+        raise RuntimeError("dataset.xlsx must contain Question and Answer columns") from exc
+
+    records = []
+    for row in rows:
+        question = str(row[question_index] or "").strip() if question_index < len(row) else ""
+        answer = str(row[answer_index] or "").strip() if answer_index < len(row) else ""
+        if question and answer:
+            records.append({"question": question, "answer": answer})
+
+    workbook.close()
+    return records
+
+
+QA_RECORDS = load_dataset()
 
 KNOWLEDGE_BASE = {
     "แผนการสอนคืออะไร": (
@@ -57,6 +74,18 @@ def clean_text(text: str) -> str:
     text = re.sub(r"[^\wก-๙]", "", text)
     return text.strip()
 
+
+def character_ngrams(text: str):
+    """Return compact character features suitable for Thai text without spaces."""
+    features = set()
+    for size in (2, 3, 4):
+        features.update(text[index:index + size] for index in range(len(text) - size + 1))
+    return features
+
+
+QA_FEATURES = [character_ngrams(clean_text(item["question"])) for item in QA_RECORDS]
+
+
 def search_qa(query: str):
     q_clean = clean_text(query)
     if not q_clean:
@@ -66,35 +95,23 @@ def search_qa(query: str):
         if clean_text(k) in q_clean or q_clean in clean_text(k):
             return v, []
 
-    # Search ChromaDB Vector Database
-    results = collection.query(
-        query_texts=[query],
-        n_results=3
-    )
+    query_features = character_ngrams(q_clean)
+    if not query_features:
+        return None, []
 
-    matched_items = []
-    if results['documents'] and results['documents'][0]:
-        distances = results['distances'][0]
-        docs = results['documents'][0]
-        metas = results['metadatas'][0]
-        
-        best_distance = distances[0]
-        best_meta = metas[0]
-        
-        for doc, meta, dist in zip(docs, metas, distances):
-            matched_items.append({
-                "question": doc,
-                "answer": meta["answer"]
-            })
-            
-        # Distance threshold (cosine distance)
-        # If very close, return it directly
-        if best_distance < 0.4:
-            return best_meta["answer"], matched_items
-            
-        return None, matched_items
+    ranked = []
+    for record, features in zip(QA_RECORDS, QA_FEATURES):
+        # Measure how much of the user's wording appears in each dataset question.
+        score = len(query_features & features) / len(query_features)
+        if score:
+            ranked.append((score, record))
 
-    return None, []
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    matched_items = [record for score, record in ranked[:3] if score >= 0.08]
+    if ranked and ranked[0][0] >= 0.35:
+        return ranked[0][1]["answer"], matched_items
+
+    return None, matched_items
 
 class ChatRequest(BaseModel):
     message: str
@@ -110,11 +127,10 @@ def read_stylesheet():
 
 @app.get("/health")
 def health_check():
-    total = collection.count()
     return {
-        "status": "ok", 
-        "total_records_in_db": total,
-        "source": "chromadb vector index"
+        "status": "ok",
+        "total_records_in_dataset": len(QA_RECORDS),
+        "source": "Excel dataset"
     }
 
 @app.post("/chat")
