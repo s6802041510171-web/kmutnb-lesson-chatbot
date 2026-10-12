@@ -1,6 +1,3 @@
 fastapi
 uvicorn
 openpyxl
-openai
-pydantic
-python-dotenv
