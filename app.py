@@ -1,12 +1,18 @@
 import os
 import re
+from pathlib import Path
 from typing import List, Optional, Any
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from openai import OpenAI
 import chromadb
 from chromadb.utils import embedding_functions
+from dotenv import load_dotenv
+
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
 
 app = FastAPI()
 
@@ -19,7 +25,7 @@ app.add_middleware(
 )
 
 # Initialize ChromaDB
-chroma_client = chromadb.PersistentClient(path="./chroma_data")
+chroma_client = chromadb.PersistentClient(path=str(BASE_DIR / "chroma_data"))
 emb_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
     model_name="paraphrase-multilingual-MiniLM-L12-v2"
 )
@@ -96,6 +102,14 @@ class ChatRequest(BaseModel):
 
 @app.get("/")
 def read_root():
+    return FileResponse(BASE_DIR / "index.html")
+
+@app.get("/style.css", include_in_schema=False)
+def read_stylesheet():
+    return FileResponse(BASE_DIR / "style.css", media_type="text/css")
+
+@app.get("/health")
+def health_check():
     total = collection.count()
     return {
         "status": "ok", 
@@ -147,7 +161,7 @@ async def chat_endpoint(req: ChatRequest):
     messages_payload.append({"role": "user", "content": user_msg})
 
     try:
-        api_key = os.getenv("TYPHOON_API_KEY", "sk-Xwwd92TNALivvIrvkwBTR5wN22NRUyIWB6tv4lq1tVWWXCbd").strip()
+        api_key = os.getenv("TYPHOON_API_KEY", "").strip()
         if not api_key:
             if matched_answer:
                 return {"source": "dataset_fallback", "reply": matched_answer}
