@@ -70,8 +70,11 @@ for record in QA_RECORDS:
     if record["answer"] not in SEEN_ANSWERS:
         ANSWER_RECORDS.append(record)
         SEEN_ANSWERS.add(record["answer"])
-ANSWER_FEATURES = [character_ngrams(clean_text(item["answer"])) for item in ANSWER_RECORDS]
-FEATURE_FREQUENCIES = Counter(feature for features in ANSWER_FEATURES for feature in features)
+RECORD_FEATURES = [
+    character_ngrams(clean_text(item["question"] + " " + item["answer"]))
+    for item in ANSWER_RECORDS
+]
+FEATURE_FREQUENCIES = Counter(feature for features in RECORD_FEATURES for feature in features)
 FEATURE_IDF = {
     feature: math.log((len(ANSWER_RECORDS) + 1) / (frequency + 1)) + 1
     for feature, frequency in FEATURE_FREQUENCIES.items()
@@ -86,15 +89,18 @@ def search_qa(query: str):
 
     ranked = []
     query_weight = sum(FEATURE_IDF.get(feature, 1) for feature in query_features)
-    for record, features in zip(ANSWER_RECORDS, ANSWER_FEATURES):
-        # Compare the query with source answers, not generated question templates.
+    for record, features in zip(ANSWER_RECORDS, RECORD_FEATURES):
+        # Match against both the indexed question and its source passage. The
+        # question often carries page/section context absent from the passage.
         score = sum(FEATURE_IDF.get(feature, 1) for feature in query_features & features) / query_weight
         if score:
             ranked.append((score, record))
 
     ranked.sort(key=lambda item: item[0], reverse=True)
-    # Do not guess from a weak match. The caller returns only a verbatim dataset answer.
-    if ranked and ranked[0][0] >= 0.45:
+    # Short Thai questions and section titles have little character overlap
+    # with long passages, so use a softer threshold while still requiring
+    # meaningful evidence from the document index.
+    if ranked and ranked[0][0] >= 0.16:
         return ranked[0][1]["answer"]
     return None
 
