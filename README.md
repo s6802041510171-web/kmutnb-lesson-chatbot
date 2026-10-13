@@ -1,11 +1,15 @@
 # KMUTNB Lesson Chatbot
 
-The Vercel deployment serves the chat page and FastAPI backend from the same project. The browser sends chat requests to `/chat` on the current Vercel domain. The backend reads the Question/Answer columns from `dataset.xlsx`, matches queries against source answers, and returns the selected Answer cell verbatim. If it cannot find a confident match, it says no matching document answer was found instead of generating one.
+The Vercel deployment serves the chat page and FastAPI backend from this project. The backend searches `knowledge_base.md`, a readable Markdown index generated from the Question/Answer columns in `dataset.xlsx`. The file keeps source passages verbatim and adds section headings and keywords to help match short questions. Answers are selected from the indexed source text; the chatbot does not generate missing document content.
+
+## Update the knowledge base
+
+After changing `dataset.xlsx`, run `python build_knowledge_base.py` to regenerate `knowledge_base.md`. The backend uses the Markdown file when present and falls back to the Excel dataset if the file is missing or empty.
 
 ## Vercel setup
 
 1. Import this GitHub repository into Vercel and deploy it with the Python runtime detected from `app.py` and `requirements.txt`.
-2. Open `/health` on the deployed domain. A successful response includes the number of dataset records loaded from Excel. No LLM API key is needed for document-only answers.
+2. Open `/health` on the deployed domain. A successful response includes the number of indexed records. No LLM API key is needed for document-only answers.
 
 ## Run locally
 
