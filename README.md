@@ -1,10 +1,10 @@
 # KMUTNB Lesson Chatbot
 
-The Vercel deployment serves the chat page and FastAPI backend from this project. The backend searches `knowledge_base.md`, a readable Markdown index generated from the Question/Answer columns in `dataset.xlsx`. The file keeps source passages verbatim and adds section headings and keywords to help match short questions. Answers are selected from the indexed source text; the chatbot does not generate missing document content.
+The Vercel deployment serves the chat page and FastAPI backend from this project. The backend searches `knowledge_base.md`, a readable Markdown index generated from the Question/Answer columns in `dataset.xlsx`, with the missing first programming step added from the user's source-document screenshot. It adds section headings and keywords to help match short questions. Answers are selected from indexed source text; the chatbot does not generate missing document content.
 
 ## Update the knowledge base
 
-After changing `dataset.xlsx`, run `python build_knowledge_base.py` to regenerate `knowledge_base.md`. The backend uses the Markdown file when present and falls back to the Excel dataset if the file is missing or empty.
+After changing `dataset.xlsx`, run `python build_knowledge_base.py` to regenerate `knowledge_base.md`. The script retains the screenshot-sourced first step because it is absent from the workbook. The backend uses the Markdown file when present and falls back to the Excel dataset if the file is missing or empty.
 
 ## Vercel setup
 

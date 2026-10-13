@@ -67,6 +67,21 @@ def main():
             records.append((question, answer))
     workbook.close()
 
+    # This passage is visible in the user's source-document screenshot but is
+    # missing from dataset.xlsx. Keep it in the generated knowledge base.
+    step_one = (
+        "1.1.2.1. ขั้นตอนที่ 1 เขียนโปรแกรม (source code) ใช้ editor เขียนโปรแกรมภาษาซีและทำ\n"
+        "การบันทึกไฟล์ให้มีนามสกุลเป็น .c เช่น work.c เป็นต้น editor คือ โปรแกรมที่ใช้สำหรับการเขียนโปรแกรม โดย\n"
+        "ตัวอย่างของ editor ที่นิยมนำมาใช้ในการเขียนโปรแกรมได้แก่ Notepad, Edit ของ Dos, TextPad และ\n"
+        "EditPlus เป็นต้น ผู้เขียนโปรแกรมสามารถเลือกใช้โปรแกรมใดในการเรียนโปรแกรมก็ได้ แล้วแต่ความถนัดของ\n"
+        "แต่ละบุคคล"
+    )
+    if step_one not in seen:
+        records.append((
+            "ขั้นตอนที่ 1 เขียนโปรแกรม source code ด้วย editor และบันทึกไฟล์ .c",
+            step_one,
+        ))
+
     output = [
         "# ฐานความรู้: บทเรียนภาษา C",
         "",
